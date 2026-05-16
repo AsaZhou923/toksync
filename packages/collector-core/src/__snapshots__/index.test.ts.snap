@@ -1,0 +1,118 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`collector-core fixtures > normalizes claude/basic 1`] = `
+[
+  {
+    "costUsd": 0.0075,
+    "dedupKey": "claude:55f04f7d36cc32bc6e6dcd6161b6cb0e2e29e773c599cd0badf13fa9e22b9071",
+    "modelId": "claude-3-5-sonnet",
+    "providerId": "anthropic",
+    "source": "claude",
+    "sourceMessageId": "a1",
+    "sourceSessionId": "claude-session-1",
+    "timestampMs": 1770086400000,
+    "tokens": {
+      "cacheRead": 50,
+      "cacheWrite": 0,
+      "input": 900,
+      "output": 300,
+      "reasoning": 0,
+    },
+  },
+  {
+    "costUsd": 0.0062,
+    "dedupKey": "claude:38a60adb35716ca186c34539ef759e91b3a5c632c8b9555eb83e40e75abcce3e",
+    "modelId": "claude-3-5-sonnet",
+    "providerId": "anthropic",
+    "source": "claude",
+    "sourceMessageId": "a2",
+    "sourceSessionId": "claude-session-1",
+    "timestampMs": 1770090000000,
+    "tokens": {
+      "cacheRead": 0,
+      "cacheWrite": 10,
+      "input": 600,
+      "output": 220,
+      "reasoning": 0,
+    },
+  },
+]
+`;
+
+exports[`collector-core fixtures > normalizes codex/basic 1`] = `
+[
+  {
+    "costUsd": 0.0123,
+    "dedupKey": "codex:4fab22a50a57a7dbb614053c227bebe28fc6a4c0af1ac9e92d225298b30b9f31",
+    "modelId": "gpt-5.4",
+    "providerId": "openai",
+    "source": "codex",
+    "sourceMessageId": "m1",
+    "sourceSessionId": "codex-session-1",
+    "timestampMs": 1770000000000,
+    "tokens": {
+      "cacheRead": 100,
+      "cacheWrite": 20,
+      "input": 1200,
+      "output": 240,
+      "reasoning": 80,
+    },
+  },
+  {
+    "costUsd": 0.0081,
+    "dedupKey": "codex:70935947c395c900c2abf181ae1558cacc7ea4c83c0c851b58a2dd015ea0d505",
+    "modelId": "gpt-5.4",
+    "providerId": "openai",
+    "source": "codex",
+    "sourceMessageId": "m2",
+    "sourceSessionId": "codex-session-1",
+    "timestampMs": 1770003600000,
+    "tokens": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 800,
+      "output": 160,
+      "reasoning": 40,
+    },
+  },
+]
+`;
+
+exports[`collector-core fixtures > normalizes opencode/basic 1`] = `
+[
+  {
+    "costUsd": 0.0052,
+    "dedupKey": "opencode:f3cfe97afaa1897a377dde28be5189a2e82c1d6b51d54b13803a0d360cf7e274",
+    "modelId": "gpt-5.4",
+    "providerId": "openai",
+    "source": "opencode",
+    "sourceMessageId": "o1",
+    "sourceSessionId": "opencode-session-1",
+    "timestampMs": 1770172800000,
+    "tokens": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 700,
+      "output": 200,
+      "reasoning": 30,
+    },
+  },
+  {
+    "costUsd": 0.0049,
+    "dedupKey": "opencode:7c25dbb963147b8ac445b15cf6351332860e301cc695d0c7d4f34cb9822993fc",
+    "modelId": "gpt-5.4",
+    "providerId": "openai",
+    "source": "opencode",
+    "sourceMessageId": "o2",
+    "sourceSessionId": "opencode-session-1",
+    "timestampMs": 1770176400000,
+    "tokens": {
+      "cacheRead": 40,
+      "cacheWrite": 0,
+      "input": 650,
+      "output": 180,
+      "reasoning": 20,
+    },
+  },
+]
+`;

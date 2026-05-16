@@ -1,0 +1,43 @@
+{
+  "events": [
+    {
+      "source": "opencode",
+      "sessionId": "opencode-session-1",
+      "messageId": "o1",
+      "model": "gpt-5.4",
+      "provider": "openai",
+      "timestamp": 1770172800000,
+      "localDate": "2026-02-05",
+      "projectName": "toksync",
+      "tokens": {
+        "input": 700,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 30
+      },
+      "costUsd": 0.0052,
+      "messageCount": 1,
+      "text": "SECRET_PROMPT_SHOULD_NOT_UPLOAD"
+    },
+    {
+      "source": "opencode",
+      "sessionId": "opencode-session-1",
+      "messageId": "o2",
+      "model": "gpt-5.4",
+      "provider": "openai",
+      "timestamp": 1770176400000,
+      "localDate": "2026-02-05",
+      "projectName": "toksync",
+      "tokens": {
+        "input": 650,
+        "output": 180,
+        "cacheRead": 40,
+        "cacheWrite": 0,
+        "reasoning": 20
+      },
+      "costUsd": 0.0049,
+      "messageCount": 1
+    }
+  ]
+}

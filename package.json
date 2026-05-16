@@ -1,0 +1,35 @@
+{
+  "name": "toksync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "turbo dev --parallel",
+    "build": "turbo build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "vitest run",
+    "test:e2e": "playwright test --project=e2e",
+    "test:visual": "playwright test --project=visual",
+    "test:perf": "tsx scripts/perf-smoke.ts",
+    "test:full": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm test:e2e && pnpm test:visual && pnpm test:perf",
+    "db:migrate": "pnpm --filter @toksync/db db:migrate",
+    "db:reset": "pnpm --filter @toksync/db db:reset",
+    "db:seed": "pnpm --filter @toksync/db db:seed",
+    "agent": "pnpm --filter @toksync/agent dev"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.15.18",
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.4",
+    "turbo": "^2.5.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}
