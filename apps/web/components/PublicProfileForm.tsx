@@ -5,15 +5,23 @@ import { Eye, RefreshCw } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+export interface PublicProfileState {
+  enabled: boolean;
+  showCost: boolean;
+  showSourceBreakdown: boolean;
+  showModelBreakdown: boolean;
+}
+
 export function PublicProfileForm({
   initial,
+  username,
+  viewPath,
+  onSaved,
 }: {
-  initial: {
-    enabled: boolean;
-    showCost: boolean;
-    showSourceBreakdown: boolean;
-    showModelBreakdown: boolean;
-  };
+  initial: PublicProfileState;
+  username: string;
+  viewPath?: string;
+  onSaved?: (next: PublicProfileState) => void;
 }) {
   const [state, setState] = useState(initial);
   const [message, setMessage] = useState<string | null>(null);
@@ -22,9 +30,17 @@ export function PublicProfileForm({
     const response = await fetch(`${API_URL}/v1/public-profile`, {
       method: "POST",
       body: JSON.stringify(next),
-      headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": username,
+      },
     });
-    setMessage(response.ok ? "Saved" : "Save failed");
+    if (response.ok) {
+      setMessage("Saved");
+      onSaved?.(next);
+    } else {
+      setMessage("Save failed");
+    }
   }
 
   function update(key: keyof typeof state, value: boolean) {
@@ -83,7 +99,10 @@ export function PublicProfileForm({
           <RefreshCw size={16} />
           Save
         </button>
-        <a className="btn" href="/u/demo">
+        <a
+          className="btn"
+          href={viewPath ?? `/u/${encodeURIComponent(username)}`}
+        >
           <Eye size={16} />
           View
         </a>

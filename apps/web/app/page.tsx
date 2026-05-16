@@ -22,6 +22,12 @@ export default async function HomePage() {
       <aside className="grid">
         <SignalPanel
           title={health?.status === "ok" ? "api online" : "api offline"}
+          empty="Connect a device to start collecting usage."
+          footerRows={[
+            { label: "sources", value: "codex / claude / opencode" },
+            { label: "payload", value: "metrics only" },
+            { label: "public data", value: "opt-in" },
+          ]}
         />
       </aside>
     </div>

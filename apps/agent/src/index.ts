@@ -8,7 +8,7 @@ import {
   discoverSources,
   summarizeEvents,
 } from "@toksync/collector-core";
-import { formatUsd } from "@toksync/shared";
+import { formatUsd, USAGE_BATCH_MAX_EVENTS } from "@toksync/shared";
 import {
   clearAuth,
   currentPlatform,
@@ -168,26 +168,44 @@ program
       throw new Error("Run toksync login before sync, or use --dry-run");
     }
 
-    const response = await postJson(
-      `${config.apiUrl}/v1/sync/usage-batch`,
-      {
-        schemaVersion: 1,
-        runId: randomUUID(),
-        device: {
-          id: config.deviceId,
-          name: config.deviceName || os.hostname() || "TokSync device",
-          platform: config.platform || currentPlatform(),
-          agentVersion: AGENT_VERSION,
+    const responses = [];
+    const chunks = chunk(result.events, USAGE_BATCH_MAX_EVENTS);
+    for (const [index, events] of chunks.entries()) {
+      const response = await postJson(
+        `${config.apiUrl}/v1/sync/usage-batch`,
+        {
+          schemaVersion: 1,
+          runId:
+            chunks.length === 1
+              ? randomUUID()
+              : `${randomUUID()}-${index + 1}-of-${chunks.length}`,
+          device: {
+            id: config.deviceId,
+            name: config.deviceName || os.hostname() || "TokSync device",
+            platform: config.platform || currentPlatform(),
+            agentVersion: AGENT_VERSION,
+          },
+          mode: "sync",
+          sourceVersions: Object.fromEntries(
+            Object.keys(summary.sources).map((source) => [source, null]),
+          ),
+          events,
         },
-        mode: "sync",
-        sourceVersions: Object.fromEntries(
-          Object.keys(summary.sources).map((source) => [source, null]),
-        ),
-        events: result.events,
-      },
-      config.deviceToken,
+        config.deviceToken,
+      );
+      responses.push(response);
+      if (chunks.length > 1) {
+        console.log(`Batch ${index + 1}/${chunks.length}`);
+        console.log(JSON.stringify(response, null, 2));
+      }
+    }
+    console.log(
+      JSON.stringify(
+        chunks.length === 1 ? responses[0] : summarizeSyncResponses(responses),
+        null,
+        2,
+      ),
     );
-    console.log(JSON.stringify(response, null, 2));
   });
 
 program.parseAsync(process.argv).catch((error) => {
@@ -222,4 +240,49 @@ async function getJson(url: string, token: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function chunk<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks.length ? chunks : [[]];
+}
+
+function summarizeSyncResponses(responses: any[]) {
+  return {
+    status: responses.every((response) => response.status === "accepted")
+      ? "accepted"
+      : "partial",
+    batches: responses.length,
+    inserted: sumResponseField(responses, "inserted"),
+    updated: sumResponseField(responses, "updated"),
+    skipped: sumResponseField(responses, "skipped"),
+    errors: responses.flatMap((response, batchIndex) =>
+      (response.errors ?? []).map((error: unknown) => ({
+        batch: batchIndex + 1,
+        ...objectValue(error),
+      })),
+    ),
+    rollupStatus: responses.every(
+      (response) => response.rollupStatus === "completed",
+    )
+      ? "completed"
+      : "partial",
+  };
+}
+
+function sumResponseField(responses: any[], field: string) {
+  return responses.reduce(
+    (sum, response) =>
+      sum + (typeof response[field] === "number" ? response[field] : 0),
+    0,
+  );
+}
+
+function objectValue(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : { value };
 }

@@ -87,6 +87,7 @@ export async function collectUsageEvents(
     for (const file of files) {
       try {
         const records: unknown[] = await readRecords(file);
+        const fileState: FileNormalizeState = {};
         records.forEach((record: unknown, index: number) => {
           const context: NormalizeContext = {
             source: location.source,
@@ -94,6 +95,7 @@ export async function collectUsageEvents(
             index,
             deviceId: options.deviceId,
             includeRawWorkspacePath: Boolean(options.includeRawWorkspacePath),
+            fileState,
           };
           if (options.workspaceHashSecret)
             context.workspaceHashSecret = options.workspaceHashSecret;
@@ -218,7 +220,16 @@ interface NormalizeContext {
   index: number;
   deviceId: string;
   includeRawWorkspacePath: boolean;
+  fileState: FileNormalizeState;
   workspaceHashSecret?: string;
+}
+
+interface FileNormalizeState {
+  sourceSessionId?: string;
+  modelId?: string;
+  providerId?: string;
+  workspacePath?: string;
+  workspaceLabel?: string;
 }
 
 function normalizeRecord(
@@ -226,7 +237,8 @@ function normalizeRecord(
   ctx: NormalizeContext,
 ): UsageEventV1 | null {
   if (!isRecord(record)) return null;
-  const tokens = normalizeTokens(record);
+  updateFileState(record, ctx.fileState);
+  const tokens = normalizeTokens(record, ctx.source);
   if (
     tokens.input +
       tokens.output +
@@ -237,19 +249,31 @@ function normalizeRecord(
   )
     return null;
 
+  const message = recordValue(record.message);
+  const payload = recordValue(record.payload);
+  const payloadInfo = recordValue(payload?.info);
+  const payloadSettings = recordValue(
+    recordValue(payload?.collaboration_mode)?.settings,
+  );
   const modelId = stringValue(
     record.modelId,
     record.model_id,
     record.model,
+    message?.model,
+    payload?.model,
+    payloadSettings?.model,
+    ctx.fileState.modelId,
     "unknown-model",
   );
   const timestampMs =
-    numberValue(
+    timestampValue(
       record.timestampMs,
       record.timestamp_ms,
       record.createdAt,
       record.created_at,
       record.timestamp,
+      payload?.timestamp,
+      payloadInfo?.created_at,
     ) ?? Date.now();
   const sourceSessionId = stringValue(
     record.sourceSessionId,
@@ -257,6 +281,9 @@ function normalizeRecord(
     record.session_id,
     record.conversationId,
     record.id,
+    payload?.id,
+    payload?.turn_id,
+    ctx.fileState.sourceSessionId,
     fileId(ctx.file),
   );
   const sourceMessageId =
@@ -265,12 +292,19 @@ function normalizeRecord(
       record.messageId,
       record.message_id,
       record.requestId,
+      message?.id,
+      record.uuid,
+      payload?.id,
+      payload?.turn_id,
+      record.timestamp,
     ) ?? String(ctx.index + 1);
   const workspacePath = optionalString(
     record.workspacePath,
     record.projectPath,
     record.cwd,
     record.path,
+    payload?.cwd,
+    ctx.fileState.workspacePath,
   );
   const rawWorkspaceLabel =
     optionalString(
@@ -278,6 +312,7 @@ function normalizeRecord(
       record.projectName,
       record.project,
       record.repo,
+      ctx.fileState.workspaceLabel,
     ) ?? (workspacePath ? workspaceLabelFromPath(workspacePath) : undefined);
   const workspaceLabel = rawWorkspaceLabel
     ? safeWorkspaceLabel(rawWorkspaceLabel)
@@ -291,18 +326,18 @@ function normalizeRecord(
         )
       : undefined);
   const providerId =
-    optionalString(record.providerId, record.provider_id, record.provider) ??
-    guessProvider(modelId);
+    optionalString(
+      record.providerId,
+      record.provider_id,
+      record.provider,
+      payload?.model_provider,
+      ctx.fileState.providerId,
+    ) ?? guessProvider(modelId);
   const dedupSeed = [
     ctx.source,
     sourceSessionId,
     sourceMessageId,
     timestampMs,
-    tokens.input,
-    tokens.output,
-    tokens.cacheRead,
-    tokens.cacheWrite,
-    tokens.reasoning,
   ].join(":");
 
   const event = {
@@ -334,21 +369,43 @@ function normalizeRecord(
   return usageEventV1Schema.parse(event);
 }
 
-function normalizeTokens(record: Record<string, unknown>) {
+function normalizeTokens(record: Record<string, unknown>, source: string) {
+  const message = recordValue(record.message);
+  const payload = recordValue(record.payload);
+  const payloadInfo = recordValue(payload?.info);
   const tokens = isRecord(record.tokens)
     ? record.tokens
     : isRecord(record.usage)
       ? record.usage
-      : record;
+      : isRecord(message?.usage)
+        ? message.usage
+        : isRecord(payloadInfo?.last_token_usage)
+          ? payloadInfo.last_token_usage
+          : record;
+  const rawInput =
+    numberValue(
+      tokens.input,
+      tokens.inputTokens,
+      tokens.input_tokens,
+      tokens.prompt_tokens,
+      tokens.promptTokens,
+    ) ?? 0;
+  const cacheRead =
+    numberValue(
+      tokens.cacheRead,
+      tokens.cache_read,
+      tokens.cacheReadTokens,
+      tokens.cache_read_tokens,
+      tokens.cache_read_input_tokens,
+      tokens.cached_input_tokens,
+    ) ?? 0;
+  const input =
+    source === "codex" && hasInclusiveCachedInput(tokens)
+      ? Math.max(rawInput - Math.min(rawInput, cacheRead), 0)
+      : rawInput;
+
   return {
-    input:
-      numberValue(
-        tokens.input,
-        tokens.inputTokens,
-        tokens.input_tokens,
-        tokens.prompt_tokens,
-        tokens.promptTokens,
-      ) ?? 0,
+    input,
     output:
       numberValue(
         tokens.output,
@@ -357,13 +414,7 @@ function normalizeTokens(record: Record<string, unknown>) {
         tokens.completion_tokens,
         tokens.completionTokens,
       ) ?? 0,
-    cacheRead:
-      numberValue(
-        tokens.cacheRead,
-        tokens.cache_read,
-        tokens.cacheReadTokens,
-        tokens.cache_read_tokens,
-      ) ?? 0,
+    cacheRead,
     cacheWrite:
       numberValue(
         tokens.cacheWrite,
@@ -371,14 +422,77 @@ function normalizeTokens(record: Record<string, unknown>) {
         tokens.cacheWriteTokens,
         tokens.cache_write_tokens,
         tokens.cacheCreationTokens,
+        tokens.cache_creation_input_tokens,
+        cacheCreationTotal(tokens.cache_creation),
       ) ?? 0,
     reasoning:
       numberValue(
         tokens.reasoning,
         tokens.reasoningTokens,
         tokens.reasoning_tokens,
+        tokens.reasoning_output_tokens,
       ) ?? 0,
   };
+}
+
+function hasInclusiveCachedInput(tokens: Record<string, unknown>) {
+  return (
+    tokens.cached_input_tokens !== undefined ||
+    tokens.cache_read_input_tokens !== undefined
+  );
+}
+
+function updateFileState(
+  record: Record<string, unknown>,
+  state: FileNormalizeState,
+) {
+  const message = recordValue(record.message);
+  const payload = recordValue(record.payload);
+  const payloadSettings = recordValue(
+    recordValue(payload?.collaboration_mode)?.settings,
+  );
+  const sessionId = optionalString(
+    record.sourceSessionId,
+    record.sessionId,
+    record.session_id,
+    record.conversationId,
+    record.id,
+    payload?.id,
+    payload?.turn_id,
+  );
+  const modelId = optionalString(
+    record.modelId,
+    record.model_id,
+    record.model,
+    message?.model,
+    payload?.model,
+    payloadSettings?.model,
+  );
+  const providerId = optionalString(
+    record.providerId,
+    record.provider_id,
+    record.provider,
+    payload?.model_provider,
+  );
+  const workspacePath = optionalString(
+    record.workspacePath,
+    record.projectPath,
+    record.cwd,
+    record.path,
+    payload?.cwd,
+  );
+  const workspaceLabel = optionalString(
+    record.workspaceLabel,
+    record.projectName,
+    record.project,
+    record.repo,
+  );
+
+  if (sessionId) state.sourceSessionId = sessionId;
+  if (modelId) state.modelId = modelId;
+  if (providerId) state.providerId = providerId;
+  if (workspacePath) state.workspacePath = workspacePath;
+  if (workspaceLabel) state.workspaceLabel = workspaceLabel;
 }
 
 function inferSourceFromPath(filePath: string): BuiltInSourceId {
@@ -440,6 +554,29 @@ function numberValue(...values: unknown[]) {
       return Number(value);
   }
   return undefined;
+}
+
+function timestampValue(...values: unknown[]) {
+  for (const value of values) {
+    const numeric = numberValue(value);
+    if (numeric !== undefined) return numeric;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function cacheCreationTotal(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const oneHour = numberValue(value.ephemeral_1h_input_tokens) ?? 0;
+  const fiveMinutes = numberValue(value.ephemeral_5m_input_tokens) ?? 0;
+  return oneHour + fiveMinutes || undefined;
+}
+
+function recordValue(value: unknown) {
+  return isRecord(value) ? value : undefined;
 }
 
 function guessProvider(modelId: string) {

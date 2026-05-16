@@ -5,13 +5,19 @@ import { RotateCcw, Trash2 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-export function DeviceActions({ deviceId }: { deviceId: string }) {
+export function DeviceActions({
+  deviceId,
+  username,
+}: {
+  deviceId: string;
+  username: string;
+}) {
   const [status, setStatus] = useState<string | null>(null);
 
   async function call(path: string, method: "POST" | "DELETE") {
     const response = await fetch(`${API_URL}${path}`, {
       method,
-      headers: { "X-TokSync-User": "demo" },
+      headers: { "X-TokSync-User": username },
     });
     setStatus(
       response.ok

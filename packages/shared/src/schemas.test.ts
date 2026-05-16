@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { totalTokens, usageBatchV1Schema, usageEventV1Schema } from "./index";
+import {
+  totalTokens,
+  usageBatchV1Schema,
+  usageEventV1Schema,
+  USAGE_BATCH_MAX_EVENTS,
+} from "./index";
 
 describe("UsageEventV1 schema", () => {
   it("accepts metrics-only usage events", () => {
@@ -73,6 +78,12 @@ describe("UsageEventV1 schema", () => {
     });
 
     expect(parsed.sourceVersions).toEqual({});
+    expect(
+      usageBatchV1Schema.safeParse({
+        ...parsed,
+        events: Array.from({ length: USAGE_BATCH_MAX_EVENTS + 1 }, () => ({})),
+      }).success,
+    ).toBe(false);
     expect(
       usageBatchV1Schema.safeParse({
         ...parsed,

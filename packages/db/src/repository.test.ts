@@ -84,4 +84,86 @@ describe("TokSyncRepository", () => {
     expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(0);
     expect(repo.getPublicStats("demo")?.totalTokens).toBe(0);
   });
+
+  it("updates events when parser fixes change generated dedup keys", () => {
+    const repo = createRepo();
+    const started = repo.createDeviceCode({
+      deviceName: "Test device",
+      platform: "windows",
+      agentVersion: "0.1.0",
+      deviceFingerprint: "fingerprint",
+    });
+    repo.authorizeDeviceCode(started.userCode, "demo");
+    const auth = repo.pollDeviceCode(started.deviceCode);
+    expect(auth.status).toBe("authorized");
+    if (auth.status !== "authorized") throw new Error("login failed");
+
+    const event = {
+      schemaVersion: 1 as const,
+      source: "codex",
+      sourceSessionId: "session-1",
+      sourceMessageId: "message-1",
+      dedupKey: "codex:legacy-token-sensitive-key",
+      deviceId: auth.deviceId,
+      workspaceKeyHash: "sha256:test",
+      workspaceLabel: "repo",
+      modelId: "gpt-5.4",
+      providerId: "openai",
+      timestampMs: 1770000000000,
+      localDate: "2026-02-03",
+      tokens: {
+        input: 100,
+        output: 40,
+        cacheRead: 20,
+        cacheWrite: 0,
+        reasoning: 10,
+      },
+      costUsd: 0.02,
+      messageCount: 1,
+      isTurnStart: true,
+    };
+
+    const first = repo.ingestUsageBatch(auth.deviceToken, {
+      schemaVersion: 1,
+      runId: "legacy-run",
+      device: {
+        id: auth.deviceId,
+        name: "Test device",
+        platform: "windows",
+        agentVersion: "0.1.0",
+      },
+      mode: "sync",
+      sourceVersions: { codex: null },
+      events: [event],
+    });
+    const second = repo.ingestUsageBatch(auth.deviceToken, {
+      schemaVersion: 1,
+      runId: "fixed-run",
+      device: {
+        id: auth.deviceId,
+        name: "Test device",
+        platform: "windows",
+        agentVersion: "0.1.0",
+      },
+      mode: "sync",
+      sourceVersions: { codex: null },
+      events: [
+        {
+          ...event,
+          dedupKey: "codex:stable-source-message-key",
+          tokens: {
+            ...event.tokens,
+            input: 80,
+          },
+          costUsd: 0.01,
+        },
+      ],
+    });
+
+    expect(first.ok && first.response.inserted).toBe(1);
+    expect(second.ok && second.response.updated).toBe(1);
+    expect(repo.dashboardSummary("demo")?.totals.messages).toBe(1);
+    expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(150);
+    expect(repo.dashboardSummary("demo")?.totals.costUsd).toBe(0.01);
+  });
 });

@@ -342,12 +342,13 @@ export class TokSyncRepository {
       }
 
       sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
-      const existing = data.usageEvents.find(
-        (item) =>
-          item.userId === auth.user.id &&
-          item.source === event.source &&
-          item.dedupKey === event.dedupKey,
+      const existingIndex = findExistingUsageEventIndex(
+        data,
+        auth.user.id,
+        event,
       );
+      const existing =
+        existingIndex >= 0 ? data.usageEvents[existingIndex] : undefined;
       if (!existing) {
         data.usageEvents.push({
           ...event,
@@ -367,8 +368,10 @@ export class TokSyncRepository {
           syncRunId: syncRun.id,
           updatedAt: now,
         });
+        removeDuplicateUsageEvents(data, auth.user.id, event, existing.id);
         updated += 1;
       } else {
+        removeDuplicateUsageEvents(data, auth.user.id, event, existing.id);
         skipped += 1;
       }
     }
@@ -795,6 +798,52 @@ function storedEventFingerprint(event: UsageEventV1) {
     messageCount: event.messageCount,
     isTurnStart: event.isTurnStart,
   });
+}
+
+function findExistingUsageEventIndex(
+  data: TokSyncData,
+  userId: string,
+  event: UsageEventV1,
+) {
+  const exactIndex = data.usageEvents.findIndex(
+    (item) =>
+      item.userId === userId &&
+      item.source === event.source &&
+      item.dedupKey === event.dedupKey,
+  );
+  if (exactIndex >= 0) return exactIndex;
+
+  return data.usageEvents.findIndex(
+    (item) => item.userId === userId && sameStableUsageIdentity(item, event),
+  );
+}
+
+function removeDuplicateUsageEvents(
+  data: TokSyncData,
+  userId: string,
+  event: UsageEventV1,
+  keepId: string,
+) {
+  for (let index = data.usageEvents.length - 1; index >= 0; index -= 1) {
+    const item = data.usageEvents[index];
+    if (
+      item &&
+      item.id !== keepId &&
+      item.userId === userId &&
+      sameStableUsageIdentity(item, event)
+    ) {
+      data.usageEvents.splice(index, 1);
+    }
+  }
+}
+
+function sameStableUsageIdentity(left: StoredUsageEvent, right: UsageEventV1) {
+  return (
+    left.source === right.source &&
+    left.sourceSessionId === right.sourceSessionId &&
+    left.sourceMessageId === right.sourceMessageId &&
+    left.timestampMs === right.timestampMs
+  );
 }
 
 function constantTimeEqual(left: string, right: string) {

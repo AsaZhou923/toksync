@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const USAGE_BATCH_MAX_EVENTS = 10_000;
+
 export const tokenBreakdownSchema = z.object({
   input: z.number().int().nonnegative(),
   output: z.number().int().nonnegative(),
@@ -39,7 +41,7 @@ export const usageBatchV1Schema = z.object({
   }),
   mode: z.enum(["dry-run", "sync"]),
   sourceVersions: z.record(z.string(), z.string().nullable()).default({}),
-  events: z.array(z.unknown()).max(10_000),
+  events: z.array(z.unknown()).max(USAGE_BATCH_MAX_EVENTS),
 });
 
 export const publicProfileInputSchema = z.object({

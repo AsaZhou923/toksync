@@ -23,8 +23,9 @@ test.describe("TokSync visual smoke", () => {
   }) => {
     await page.goto("/app");
     await expect(
-      page.getByRole("heading", { name: "Usage control room" }),
+      page.getByRole("heading", { name: "AI coding usage" }),
     ).toBeVisible();
+    await expect(page.getByTestId("trend-bar")).toHaveCount(1);
     await assertVisualSignal(page, "body", "dashboard.png", 80);
 
     await page.goto("/app/embed");

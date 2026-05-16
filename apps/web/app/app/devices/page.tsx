@@ -1,4 +1,4 @@
-import { apiGet } from "../../../lib/api";
+import { apiGet, USER } from "../../../lib/api";
 import { DeviceActions } from "../../../components/DeviceActions";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +48,7 @@ export default async function DevicesPage() {
                   </span>
                 </td>
                 <td>
-                  <DeviceActions deviceId={device.id} />
+                  <DeviceActions deviceId={device.id} username={USER} />
                 </td>
               </tr>
             ))}

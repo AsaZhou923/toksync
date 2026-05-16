@@ -57,9 +57,11 @@ test.describe("TokSync local agent flow", () => {
 
     await page.goto("/app");
     await expect(
-      page.getByRole("heading", { name: "Usage control room" }),
+      page.getByRole("heading", { name: "AI coding usage" }),
     ).toBeVisible();
     await expect(page.getByText("2.6K").first()).toBeVisible();
+    await expect(page.getByTestId("trend-bar")).toHaveCount(1);
+    await expect(page.getByText("rollup stream")).toHaveCount(0);
     await expect(page.getByText("Daily usage")).toBeVisible();
 
     await page.goto("/app/embed");
@@ -67,6 +69,17 @@ test.describe("TokSync local agent flow", () => {
       page.getByRole("heading", { name: "README embed" }),
     ).toBeVisible();
     await expect(page.locator(".svg-preview img")).toHaveCount(3);
+    await expect(page.getByTestId("badge-snippet")).toContainText(
+      `${apiUrl}/v1/badge/demo.svg?metric=tokens`,
+    );
+    await page.getByRole("checkbox", { name: "Public profile" }).uncheck();
+    await expect(page.getByTestId("embed-status")).toContainText("private");
+    await expect(page.getByAltText("TokSync badge preview")).toHaveAttribute(
+      "src",
+      /preview=1/,
+    );
+    await page.getByRole("checkbox", { name: "Public profile" }).check();
+    await expect(page.getByTestId("embed-status")).toContainText("public");
 
     await page.goto("/u/demo");
     await expect(page.getByRole("heading", { name: "@demo" })).toBeVisible();

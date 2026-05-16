@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Clock3,
   Coins,
+  ExternalLink,
   MessageSquare,
   RotateCw,
 } from "lucide-react";
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
 export default async function AppDashboardPage() {
   const summary = await apiGet<any>("/v1/dashboard/summary");
   const daily = await apiGet<any>("/v1/dashboard/usage-daily");
+  const syncRuns = await apiGet<any>("/v1/sync-runs");
   const totals = summary?.totals ?? {
     tokens: 0,
     costUsd: 0,
@@ -24,47 +26,68 @@ export default async function AppDashboardPage() {
     messages: 0,
     turns: 0,
   };
+  const days = daily?.days ?? [];
+  const firstDay = days[0]?.date;
+  const lastDay = days.at(-1)?.date;
+  const rangeLabel =
+    firstDay && lastDay
+      ? firstDay === lastDay
+        ? firstDay
+        : `${firstDay} to ${lastDay}`
+      : "No synced days";
+  const latestRun = syncRuns?.runs?.[0];
+  const latestRunEvents = latestRun
+    ? latestRun.insertedCount + latestRun.updatedCount + latestRun.skippedCount
+    : 0;
   return (
     <div className="grid">
       <header className="page-head">
         <div>
-          <p className="page-kicker">private dashboard</p>
-          <h1>Usage control room</h1>
+          <p className="page-kicker">private usage dashboard</p>
+          <h1>AI coding usage</h1>
           <p className="lede">
-            Token, cost, device and model rollups from the local metrics-only
-            sync stream.
+            See what your synced AI coding tools cost, which source is driving
+            usage, and whether the latest sync completed.
           </p>
+          <span className="time-scope">{rangeLabel}</span>
         </div>
-        <a className="btn primary" href="/app/embed">
-          README embed
-        </a>
+        <div className="page-actions">
+          <a className="btn primary" href="/app/sync-runs">
+            <RotateCw size={16} />
+            Sync runs
+          </a>
+          <a className="btn" href="/app/embed">
+            <ExternalLink size={16} />
+            README embed
+          </a>
+        </div>
       </header>
       <section className="grid grid-4">
         <MetricCard
           icon={Activity}
           label="Tokens"
           value={formatCompactNumber(totals.tokens)}
-          detail="deduped usage events"
+          detail="all synced usage"
         />
         <MetricCard
           icon={Coins}
           label="Cost"
           value={formatUsd(totals.costUsd)}
-          detail="estimated USD"
+          detail="approximate total"
           tone="amber"
         />
         <MetricCard
           icon={CalendarDays}
           label="Active days"
           value={String(totals.activeDays)}
-          detail="local dates"
+          detail="tracked calendar days"
           tone="cyan"
         />
         <MetricCard
           icon={MessageSquare}
           label="Messages"
           value={String(totals.messages)}
-          detail={`${totals.turns} turns`}
+          detail={`${totals.turns} coding turns`}
           tone="violet"
         />
       </section>
@@ -73,10 +96,28 @@ export default async function AppDashboardPage() {
         <BreakdownPanel title="Top models" rows={summary?.topModels ?? []} />
       </section>
       <section className="grid grid-2">
-        <SignalPanel title="rollup stream" />
+        <SignalPanel
+          title="Daily token trend"
+          bars={days.map((day: any) => ({
+            label: day.date,
+            value: day.tokens,
+          }))}
+          empty="Run a sync to populate the daily trend."
+          footerRows={[
+            {
+              label: "top source",
+              value: summary?.topSources?.[0]?.key ?? "none",
+            },
+            {
+              label: "top model",
+              value: summary?.topModels?.[0]?.key ?? "none",
+            },
+            { label: "payload", value: "metrics only" },
+          ]}
+        />
         <div className="card">
           <div className="metric-row">
-            <h2 className="section-title">Sync clock</h2>
+            <h2 className="section-title">Sync status</h2>
             <Clock3 size={18} />
           </div>
           <div className="console-stack">
@@ -89,12 +130,16 @@ export default async function AppDashboardPage() {
               </strong>
             </div>
             <div className="console-line">
-              <span>workspace</span>
-              <strong>{summary?.topWorkspaces?.[0]?.key ?? "none"}</strong>
+              <span>latest run</span>
+              <strong>{latestRun?.status ?? "none"}</strong>
             </div>
             <div className="console-line">
-              <span>replay</span>
-              <strong>safe</strong>
+              <span>run events</span>
+              <strong>{latestRun ? String(latestRunEvents) : "none"}</strong>
+            </div>
+            <div className="console-line">
+              <span>workspace</span>
+              <strong>{summary?.topWorkspaces?.[0]?.key ?? "none"}</strong>
             </div>
           </div>
           <a className="btn" href="/app/sync-runs">

@@ -9,6 +9,11 @@ When docs and code disagree, use this rule:
 - The repository describes what is currently implemented.
 - If a change alters product scope, API contracts, privacy boundaries, or data shape, update the relevant external spec docs as part of the same work.
 
+## Agent Model Preference
+
+- When spawning Codex native subagents for this repository, do not use Spark models.
+- Avoid Spark-backed child roles such as `explore`; do lookup work locally or use non-Spark roles such as `analyst`, `executor`, `writer`, or `verifier`.
+
 ## Mission
 
 TokSync is a metrics-only telemetry hub for AI coding tools. It aggregates token,

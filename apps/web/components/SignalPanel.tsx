@@ -1,36 +1,54 @@
-export function SignalPanel({ title = "sync signal" }: { title?: string }) {
-  const heights = [
-    34, 46, 28, 62, 74, 52, 88, 92, 70, 110, 84, 118, 98, 130, 112, 146, 124,
-    138,
-  ];
+import { formatCompactNumber } from "@toksync/shared";
+
+export function SignalPanel({
+  title = "sync signal",
+  bars = [],
+  empty = "No synced usage yet",
+  footerRows = [],
+}: {
+  title?: string;
+  bars?: Array<{ label: string; value: number }>;
+  empty?: string;
+  footerRows?: Array<{ label: string; value: string }>;
+}) {
+  const max = Math.max(1, ...bars.map((bar) => bar.value));
   return (
-    <section className="card signal-card">
+    <section className="card signal-card" data-testid="usage-trend">
       <div className="metric-row">
         <span className="pill">
           <span className="status-dot" />
           {title}
         </span>
-        <span className="muted">v0.1</span>
+        <span className="muted">real usage</span>
       </div>
-      <div className="signal-bars" aria-hidden="true">
-        {heights.map((height, index) => (
-          <span key={index} style={{ height }} />
-        ))}
-      </div>
-      <div className="console-stack">
-        <div className="console-line">
-          <span>collector</span>
-          <strong>codex / claude / opencode</strong>
+      {bars.length === 0 ? (
+        <div className="signal-empty">{empty}</div>
+      ) : (
+        <div
+          className="signal-bars"
+          role="img"
+          aria-label={`${title} based on synced daily token totals`}
+        >
+          {bars.map((bar) => (
+            <span
+              data-testid="trend-bar"
+              key={bar.label}
+              title={`${bar.label}: ${formatCompactNumber(bar.value)} tokens`}
+              style={{ height: `${Math.max(8, (bar.value / max) * 100)}%` }}
+            />
+          ))}
         </div>
-        <div className="console-line">
-          <span>payload</span>
-          <strong>metrics-only</strong>
+      )}
+      {footerRows.length > 0 ? (
+        <div className="console-stack">
+          {footerRows.map((row) => (
+            <div className="console-line" key={row.label}>
+              <span>{row.label}</span>
+              <strong>{row.value}</strong>
+            </div>
+          ))}
         </div>
-        <div className="console-line">
-          <span>dedup</span>
-          <strong>source + key</strong>
-        </div>
-      </div>
+      ) : null}
     </section>
   );
 }

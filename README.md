@@ -68,6 +68,11 @@ packages/
                Synthetic parser fixtures
 ```
 
+Workspace imports are intentionally checked by `pnpm check:boundaries`.
+When adding a new app, package, or package-to-package dependency, update
+`scripts/check-package-boundaries.ts` in the same change so the dependency
+direction stays explicit and reviewable.
+
 The active local store is `FileTokSyncStore`, controlled by `TOKSYNC_DB_FILE`.
 `packages/db/migrations/0001_v0_1_metrics.sql` is the current forward SQL shape
 for hosted Postgres.
@@ -103,6 +108,7 @@ same events rather than double-counting totals.
 
 ```bash
 pnpm format:check
+pnpm check:boundaries
 pnpm typecheck
 pnpm lint
 pnpm test

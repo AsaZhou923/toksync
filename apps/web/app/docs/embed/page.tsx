@@ -1,8 +1,8 @@
 import { apiUrl } from "../../../lib/api";
 
 export default function EmbedDocsPage() {
-  const badge = `${apiUrl("/v1/badge/demo.svg")}?metric=tokens`;
-  const card = `${apiUrl("/v1/embed/demo.svg")}?theme=dark`;
+  const badge = apiUrl("/v1/badge/your-username.svg?metric=tokens");
+  const card = apiUrl("/v1/embed/your-username.svg?theme=dark");
   return (
     <div className="grid">
       <h1>README embed</h1>

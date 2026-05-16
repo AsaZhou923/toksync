@@ -1,4 +1,4 @@
-import { apiGet } from "../../../lib/api";
+import { apiGet, USER } from "../../../lib/api";
 import { PublicProfileForm } from "../../../components/PublicProfileForm";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,11 @@ export default async function SettingsPage() {
   return (
     <div className="grid">
       <h1>Settings</h1>
-      <PublicProfileForm initial={profile} />
+      <PublicProfileForm
+        initial={profile}
+        username={USER}
+        viewPath={profile.url ?? `/u/${encodeURIComponent(USER)}`}
+      />
     </div>
   );
 }
