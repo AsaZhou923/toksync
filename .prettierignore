@@ -5,6 +5,7 @@ coverage/
 .turbo/
 .omx/
 .tmp/
+.playwright-mcp/
 output/
 pnpm-lock.yaml
 *.tsbuildinfo

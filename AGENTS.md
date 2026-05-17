@@ -35,6 +35,7 @@ The v0.1 loop is:
 - Never include prompt text, assistant response text, tool arguments, tool output, file content, secrets, raw absolute project paths, source session details, or message text in public output.
 - Public profile is opt-in. README badge/profile-card data must come only from public aggregate state, not private raw events.
 - Leaderboard is not v0.1. If touched, it must remain opt-in and use public aggregate snapshots only.
+- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, Private Usage Vault, and Public Proof Pack are planned differentiators, not current v0.1 implementation. If touched early, present them as planned or disabled surfaces unless the product scope is explicitly changed.
 - Billing, subscription plans, payment providers, paid limits, and billing UI are out of scope for v0.1.
 - Cost estimates are approximate; do not present them as provider billing truth.
 - Device fingerprinting must not use hostname, MAC address, OS machine id, username, home path, or project path. It should derive from a local random seed and server-side pepper.
@@ -69,6 +70,8 @@ The v0.1 loop is:
 - Auth and permission: `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\auth-and-permission.md`
 - Local development: `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\local-development.md`
 - Testing strategy: `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\testing.md`
+- Current feature guide: `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- Latest docs change list: `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
 - Current repo README: `README.md`
 
 ## Package Boundaries

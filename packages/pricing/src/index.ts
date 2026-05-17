@@ -109,9 +109,14 @@ const MODEL_ALIASES: Record<string, string> = {
   "zai/glm-5": "glm-5",
 };
 
+const pricingCache = new Map<string, ModelPricing | undefined>();
+
 export function pricingForModel(modelId: string): ModelPricing | undefined {
+  if (pricingCache.has(modelId)) return pricingCache.get(modelId);
   const key = canonicalModelId(modelId);
-  return key ? MODEL_PRICING[key] : undefined;
+  const pricing = key ? MODEL_PRICING[key] : undefined;
+  pricingCache.set(modelId, pricing);
+  return pricing;
 }
 
 export function estimateCostUsd(modelId: string, tokens: TokenBreakdown) {

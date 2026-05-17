@@ -9,6 +9,7 @@ import {
   summarizeEvents,
 } from "@toksync/collector-core";
 import { formatUsd, USAGE_BATCH_MAX_EVENTS } from "@toksync/shared";
+import { assertMetricsOnlyPayload, sha256Base64Url } from "@toksync/privacy";
 import {
   clearAuth,
   currentPlatform,
@@ -34,6 +35,7 @@ program
     "--auto-authorize <username>",
     "Development helper: authorize the device code immediately",
   )
+  .option("--token <token>", "Use a user API token for headless/private sync")
   .action(async (options) => {
     const config = loadConfig();
     config.apiUrl = options.api || config.apiUrl;
@@ -43,6 +45,15 @@ program
       os.hostname() ||
       "TokSync device";
     config.platform = currentPlatform();
+
+    if (options.token) {
+      config.deviceToken = options.token;
+      config.deviceId =
+        config.deviceId || `headless-${deviceFingerprint(config).slice(0, 24)}`;
+      saveConfig(config);
+      console.log("Configured TokSync user API token for headless sync");
+      return;
+    }
 
     const started = await postJson(`${config.apiUrl}/v1/auth/device/start`, {
       deviceName: config.deviceName,
@@ -101,11 +112,15 @@ program
       `Device: ${config.deviceId ? `${config.deviceName ?? "device"} (${config.deviceId})` : "not connected"}`,
     );
     if (config.deviceToken) {
-      const state = await getJson(
-        `${config.apiUrl}/v1/sync/state`,
-        config.deviceToken,
-      ).catch((error) => ({ error: String(error) }));
-      console.log(JSON.stringify(state, null, 2));
+      if (config.deviceToken.startsWith("tsd_")) {
+        const state = await getJson(
+          `${config.apiUrl}/v1/sync/state`,
+          config.deviceToken,
+        ).catch((error) => ({ error: String(error) }));
+        console.log(JSON.stringify(state, null, 2));
+      } else {
+        console.log("Auth: user API token configured");
+      }
     }
   });
 
@@ -136,7 +151,9 @@ program
   .action(async (options) => {
     const config = loadConfig();
     if (!config.deviceId) {
-      config.deviceId = "dry-run-device";
+      config.deviceId = options.dryRun
+        ? "dry-run-device"
+        : `headless-${deviceFingerprint(config).slice(0, 24)}`;
     }
 
     const collectOptions = {
@@ -151,6 +168,24 @@ program
     }
     const result = await collectUsageEvents(collectOptions);
     const summary = summarizeEvents(result.events);
+    const batchBase = {
+      schemaVersion: 1,
+      device: {
+        id: config.deviceId,
+        name: config.deviceName || os.hostname() || "TokSync device",
+        platform: config.platform || currentPlatform(),
+        agentVersion: AGENT_VERSION,
+      },
+      sourceVersions: Object.fromEntries(
+        Object.keys(summary.sources).map((source) => [source, null]),
+      ),
+      events: result.events,
+    };
+    const receipt = buildLocalReceipt({
+      ...batchBase,
+      runId: "dry-run",
+      mode: options.dryRun ? "dry-run" : "sync",
+    });
     console.log(`Events: ${summary.eventCount}`);
     console.log(`Tokens: ${summary.tokens}`);
     console.log(`Cost: ${formatUsd(summary.costUsd)}`);
@@ -158,13 +193,18 @@ program
       `Date range: ${summary.dateStart ?? "n/a"} to ${summary.dateEnd ?? "n/a"}`,
     );
     console.log(`Sources: ${JSON.stringify(summary.sources)}`);
+    console.log(`Receipt digest: ${receipt.payloadDigest}`);
+    console.log(
+      `Receipt excluded fields: ${receipt.excludedFields.join(", ")}`,
+    );
 
     if (result.errors.length > 0) {
       console.log(`Warnings: ${JSON.stringify(result.errors, null, 2)}`);
     }
 
     if (options.dryRun) return;
-    if (!config.deviceToken || !config.deviceId) {
+    const writeToken = process.env.TOKSYNC_API_TOKEN || config.deviceToken;
+    if (!writeToken || !config.deviceId) {
       throw new Error("Run toksync login before sync, or use --dry-run");
     }
 
@@ -174,24 +214,15 @@ program
       const response = await postJson(
         `${config.apiUrl}/v1/sync/usage-batch`,
         {
-          schemaVersion: 1,
+          ...batchBase,
           runId:
             chunks.length === 1
               ? randomUUID()
               : `${randomUUID()}-${index + 1}-of-${chunks.length}`,
-          device: {
-            id: config.deviceId,
-            name: config.deviceName || os.hostname() || "TokSync device",
-            platform: config.platform || currentPlatform(),
-            agentVersion: AGENT_VERSION,
-          },
           mode: "sync",
-          sourceVersions: Object.fromEntries(
-            Object.keys(summary.sources).map((source) => [source, null]),
-          ),
           events,
         },
-        config.deviceToken,
+        writeToken,
       );
       responses.push(response);
       if (chunks.length > 1) {
@@ -247,7 +278,7 @@ function chunk<T>(items: T[], size: number) {
   for (let index = 0; index < items.length; index += size) {
     chunks.push(items.slice(index, index + size));
   }
-  return chunks.length ? chunks : [[]];
+  return chunks;
 }
 
 function summarizeSyncResponses(responses: any[]) {
@@ -285,4 +316,36 @@ function objectValue(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value
     : { value };
+}
+
+function buildLocalReceipt(batch: unknown) {
+  assertMetricsOnlyPayload(batch);
+  return {
+    payloadDigest: `sha256:${sha256Base64Url(JSON.stringify(batch))}`,
+    uploadedFields: [
+      "schemaVersion",
+      "source",
+      "device identity",
+      "workspace label",
+      "modelId",
+      "providerId",
+      "timestampMs",
+      "localDate",
+      "tokens",
+      "costUsd",
+      "messageCount",
+      "isTurnStart",
+    ],
+    excludedFields: [
+      "conversation content",
+      "assistant replies",
+      "tool payloads",
+      "file contents",
+      "raw project paths",
+      "source message identifiers",
+      "workspace hashes",
+      "secrets",
+      "device names",
+    ],
+  };
 }

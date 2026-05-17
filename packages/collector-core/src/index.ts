@@ -3,7 +3,11 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { estimateCostUsd } from "@toksync/pricing";
-import { hashWorkspacePath, workspaceLabelFromPath } from "@toksync/privacy";
+import {
+  hashWorkspacePath,
+  sanitizeWorkspaceLabel,
+  workspaceLabelFromPath,
+} from "@toksync/privacy";
 import {
   SOURCE_REGISTRY,
   isoDateFromMs,
@@ -25,12 +29,20 @@ export interface CollectOptions {
   sources?: string[];
   includeRawWorkspacePath?: boolean;
   workspaceHashSecret?: string;
+  logger?: (entry: CollectLogEntry) => void;
 }
 
 export interface CollectResult {
   events: UsageEventV1[];
   locations: SourceLocation[];
   errors: Array<{ source: string; path: string; message: string }>;
+}
+
+export interface CollectLogEntry {
+  level: "info" | "warn";
+  source?: string;
+  path?: string;
+  message: string;
 }
 
 export async function discoverSources(
@@ -87,6 +99,12 @@ export async function collectUsageEvents(
     for (const file of files) {
       try {
         const records: unknown[] = await readRecords(file);
+        options.logger?.({
+          level: "info",
+          source: location.source,
+          path: file,
+          message: `Read ${records.length} usage records`,
+        });
         const fileState: FileNormalizeState = {};
         records.forEach((record: unknown, index: number) => {
           const context: NormalizeContext = {
@@ -103,10 +121,17 @@ export async function collectUsageEvents(
           if (event) events.push(event);
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         errors.push({
           source: location.source,
           path: file,
-          message: error instanceof Error ? error.message : String(error),
+          message,
+        });
+        options.logger?.({
+          level: "warn",
+          source: location.source,
+          path: file,
+          message,
         });
       }
     }
@@ -205,9 +230,9 @@ async function readRecords(file: string) {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => safeJsonParse(line));
   }
-  const json = JSON.parse(raw);
+  const json = safeJsonParse(raw);
   if (Array.isArray(json)) return json;
   if (Array.isArray(json.events)) return json.events;
   if (Array.isArray(json.messages)) return json.messages;
@@ -437,8 +462,9 @@ function normalizeTokens(record: Record<string, unknown>, source: string) {
 
 function hasInclusiveCachedInput(tokens: Record<string, unknown>) {
   return (
-    tokens.cached_input_tokens !== undefined ||
-    tokens.cache_read_input_tokens !== undefined
+    (tokens.cached_input_tokens !== undefined ||
+      tokens.cache_read_input_tokens !== undefined) &&
+    (tokens.input_tokens !== undefined || tokens.prompt_tokens !== undefined)
   );
 }
 
@@ -496,9 +522,14 @@ function updateFileState(
 }
 
 function inferSourceFromPath(filePath: string): BuiltInSourceId {
-  const normalized = filePath.replaceAll("\\", "/").toLowerCase();
-  if (normalized.includes("claude")) return "claude";
-  if (normalized.includes("opencode")) return "opencode";
+  const segments = filePath
+    .replaceAll("\\", "/")
+    .toLowerCase()
+    .split("/")
+    .filter(Boolean);
+  if (segments.some((segment) => segment === ".claude" || segment === "claude"))
+    return "claude";
+  if (segments.some((segment) => segment === "opencode")) return "opencode";
   return "codex";
 }
 
@@ -509,7 +540,7 @@ function fileId(file: string) {
 function safeWorkspaceLabel(label: string) {
   return looksLikePath(label)
     ? workspaceLabelFromPath(label)
-    : sanitizeLabel(label);
+    : sanitizeWorkspaceLabel(label);
 }
 
 function looksLikePath(value: string) {
@@ -520,10 +551,6 @@ function looksLikePath(value: string) {
     value.includes("\\") ||
     value.includes("/")
   );
-}
-
-function sanitizeLabel(label: string) {
-  return label.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 80) || "workspace";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -585,6 +612,15 @@ function guessProvider(modelId: string) {
   if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4"))
     return "openai";
   return "unknown";
+}
+
+function safeJsonParse(raw: string) {
+  return JSON.parse(raw, (key, value) => {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      throw new Error(`Unsafe JSON key rejected: ${key}`);
+    }
+    return value;
+  });
 }
 
 async function exists(filePath: string) {

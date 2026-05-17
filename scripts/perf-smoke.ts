@@ -2,12 +2,19 @@ import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import type { UsageEventV1 } from "@toksync/shared";
-import { createApiApp } from "../apps/api/src/app";
-import { collectUsageEvents } from "../packages/collector-core/src/index";
-import { FileTokSyncStore, TokSyncRepository } from "../packages/db/src/index";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
+const { createApiApp } = await importWorkspaceModule<
+  typeof import("../apps/api/src/app")
+>("apps/api/src/app.ts");
+const { collectUsageEvents } = await importWorkspaceModule<
+  typeof import("../packages/collector-core/src")
+>("packages/collector-core/src/index.ts");
+const { FileTokSyncStore, TokSyncRepository } = await importWorkspaceModule<
+  typeof import("../packages/db/src")
+>("packages/db/src/index.ts");
 const perfDir = path.join(rootDir, ".tmp", "perf-smoke");
 const tenMb = 10 * 1024 * 1024;
 
@@ -42,7 +49,7 @@ const events = Array.from({ length: 10_000 }, (_, index) =>
 );
 
 const ingestStarted = performance.now();
-const ingestResponse = await json<any>(
+const ingestResponse = await json<SyncResponse>(
   await api.request("/v1/sync/usage-batch", {
     method: "POST",
     body: JSON.stringify({
@@ -72,7 +79,7 @@ assert(
 assertUnder("10k API ingest", ingestMs, 30_000);
 
 const summaryStarted = performance.now();
-const summary = await json<any>(
+const summary = await json<DashboardSummary>(
   await api.request("/v1/dashboard/summary", {
     headers: { "X-TokSync-User": "demo" },
   }),
@@ -123,7 +130,7 @@ console.log(
 );
 
 async function connectDevice() {
-  const start = await json<any>(
+  const start = await json<DeviceStartResponse>(
     await api.request("/v1/auth/device/start", {
       method: "POST",
       body: JSON.stringify({
@@ -151,6 +158,22 @@ async function connectDevice() {
 
 async function json<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
+}
+
+interface DeviceStartResponse {
+  deviceCode: string;
+  userCode: string;
+}
+
+interface SyncResponse {
+  inserted: number;
+  rollupStatus: string;
+}
+
+interface DashboardSummary {
+  totals: {
+    tokens: number;
+  };
 }
 
 function createTenMbJsonlFixture() {
@@ -225,4 +248,10 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function round(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function importWorkspaceModule<T>(relativePath: string): Promise<T> {
+  return import(
+    pathToFileURL(path.join(rootDir, relativePath)).href
+  ) as Promise<T>;
 }

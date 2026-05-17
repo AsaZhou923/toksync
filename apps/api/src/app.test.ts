@@ -22,7 +22,7 @@ function lockedContext() {
   return { api: createApiApp({ repo, devAuth: false }), repo };
 }
 
-async function json<T = any>(response: Response): Promise<T> {
+async function json<T = unknown>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
@@ -73,6 +73,29 @@ async function connectDevice(
 
   expect(poll.status).toBe("authorized");
   return poll;
+}
+
+interface SyncBatchResponse {
+  status: "accepted" | "rejected";
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ index: number; code: string; message: string }>;
+  rollupStatus: "completed";
+}
+
+interface DashboardSummaryResponse {
+  totals: {
+    tokens: number;
+    activeDays: number;
+    messages: number;
+    turns: number;
+  };
+  topModels: Array<{ key: string }>;
+}
+
+interface UsageDailyResponse {
+  days: Array<{ date: string }>;
 }
 
 function usageEvent(
@@ -208,13 +231,17 @@ describe("TokSync API", () => {
     const auth = await connectDevice(api);
     const payload = usageBatch(auth.deviceId, [usageEvent(auth.deviceId)]);
 
-    const first = await json(await postBatch(api, auth.deviceToken, payload));
-    const second = await json(await postBatch(api, auth.deviceToken, payload));
+    const first = await json<SyncBatchResponse>(
+      await postBatch(api, auth.deviceToken, payload),
+    );
+    const second = await json<SyncBatchResponse>(
+      await postBatch(api, auth.deviceToken, payload),
+    );
 
     expect(first.inserted).toBe(1);
     expect(second.skipped).toBe(1);
 
-    const summary = await json<any>(
+    const summary = await json<DashboardSummaryResponse>(
       await api.request("/v1/dashboard/summary", {
         headers: { "X-TokSync-User": "demo" },
       }),
@@ -316,7 +343,7 @@ describe("TokSync API", () => {
         })
       ).status,
     ).toBe(200);
-    const firstPoll = await json<any>(
+    const firstPoll = await json<{ status: "authorized" }>(
       await api.request("/v1/auth/device/poll", {
         method: "POST",
         body: JSON.stringify({ deviceCode: start.deviceCode }),
@@ -330,7 +357,29 @@ describe("TokSync API", () => {
     });
 
     expect(firstPoll.status).toBe("authorized");
-    expect(secondPoll.status).toBe(404);
+    expect(secondPoll.status).toBe(409);
+    expect(await json(secondPoll)).toMatchObject({
+      error: { code: "consumed_code" },
+    });
+  });
+
+  it("rate-limits device authorization endpoints", async () => {
+    const { api } = testContext();
+    let lastStatus = 200;
+    for (let index = 0; index < 31; index += 1) {
+      const response = await api.request("/v1/auth/device/start", {
+        method: "POST",
+        body: JSON.stringify({
+          deviceName: `Rate limited device ${index}`,
+          platform: "windows",
+          agentVersion: "0.1.0",
+          deviceFingerprint: `rate-limit-device-${index}`,
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+      lastStatus = response.status;
+    }
+    expect(lastStatus).toBe(429);
   });
 
   it("returns per-event errors without double-counting valid retry payloads", async () => {
@@ -584,5 +633,180 @@ describe("TokSync API", () => {
     expect(svg).not.toContain("<script");
     expect(svg).not.toContain(secretPath);
     expect(svg).not.toContain("sha256:private");
+  });
+
+  it("creates and revokes user API tokens for headless metrics sync", async () => {
+    const { api } = testContext();
+
+    const created = await json<any>(
+      await api.request("/v1/settings/tokens", {
+        method: "POST",
+        body: JSON.stringify({ name: "CI sync", scopes: ["usage:write"] }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-TokSync-User": "demo",
+        },
+      }),
+    );
+    expect(created.token).toMatch(/^tsu_/);
+    expect(JSON.stringify(created.metadata)).not.toContain(created.token);
+    expect(JSON.stringify(created.metadata)).not.toContain("tokenHash");
+    expect(JSON.stringify(created.metadata)).not.toContain("userId");
+
+    const deviceId = "headless-ci-device";
+    const synced = await json<any>(
+      await postBatch(
+        api,
+        created.token,
+        usageBatch(
+          deviceId,
+          [
+            usageEvent(deviceId, {
+              dedupKey: "codex:user-token",
+              sourceMessageId: "user-token-message",
+            }),
+          ],
+          "user-token-run",
+        ),
+      ),
+    );
+    expect(synced.inserted).toBe(1);
+    const tokenList = await json<any>(
+      await api.request("/v1/settings/tokens", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    expect(tokenList.tokens).toHaveLength(1);
+    expect(JSON.stringify(tokenList)).not.toContain(created.token);
+    expect(JSON.stringify(tokenList)).not.toContain("tokenHash");
+    expect(JSON.stringify(tokenList)).not.toContain("userId");
+
+    expect(
+      (
+        await api.request(`/v1/settings/tokens/${created.metadata.id}`, {
+          method: "DELETE",
+          headers: { "X-TokSync-User": "demo" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await postBatch(
+          api,
+          created.token,
+          usageBatch(deviceId, [], "revoked-token-run"),
+        )
+      ).status,
+    ).toBe(401);
+  });
+
+  it("exposes v0.2 governance surfaces without leaking metrics-private values", async () => {
+    const { api } = testContext();
+    const auth = await connectDevice(api);
+    const secretPath = "C:/Users/alice/private-client/source";
+    const payload = usageBatch(auth.deviceId, [
+      usageEvent(auth.deviceId, {
+        workspaceKeyHash: "sha256:private-workspace",
+        workspaceLabel: secretPath,
+        dedupKey: "codex:v02-private-field-check",
+        sourceSessionId: "private-session-id",
+        sourceMessageId: "private-message-id",
+      }),
+    ]);
+
+    await postBatch(api, auth.deviceToken, payload);
+    await postBatch(api, auth.deviceToken, payload);
+
+    const receipts = await json<any>(
+      await api.request("/v1/sync/receipts", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const sourceHealth = await json<any>(
+      await api.request("/v1/source-health", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const merge = await json<any>(
+      await api.request("/v1/merge/issues", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const exported = await api.request("/v1/exports?format=json", {
+      headers: { "X-TokSync-User": "demo" },
+    });
+    const exportedText = await exported.text();
+    const combined = `${JSON.stringify(receipts)}${JSON.stringify(
+      sourceHealth,
+    )}${exportedText}`;
+
+    expect(receipts.receipts[0].payloadDigest).toMatch(/^sha256:/);
+    expect(
+      sourceHealth.sources.some((row: any) => row.source === "codex"),
+    ).toBe(true);
+    expect(
+      merge.issues.some((issue: any) => issue.type === "duplicate_history"),
+    ).toBe(true);
+    expect(merge.issues[0]?.devices).toContain(auth.deviceId);
+    expect(exported.headers.get("x-toksync-export-rows")).toBe("1");
+    expect(combined).not.toContain(secretPath);
+    expect(combined).not.toContain("sha256:private-workspace");
+    expect(combined).not.toContain("private-session-id");
+    expect(combined).not.toContain("private-message-id");
+    expect(combined).not.toContain("codex:v02-private-field-check");
+    expect(combined).not.toContain(auth.deviceId);
+    expect(combined).not.toContain("userId");
+    expect(combined).not.toContain("deviceFingerprintHash");
+    expect(combined).not.toContain("tokenHash");
+    expect(combined).not.toContain("prompt");
+    expect(combined).not.toContain("toolArguments");
+  });
+
+  it("deletes submitted public data without deleting private metrics", async () => {
+    const { api } = testContext();
+    const auth = await connectDevice(api);
+    await postBatch(
+      api,
+      auth.deviceToken,
+      usageBatch(auth.deviceId, [
+        usageEvent(auth.deviceId, { dedupKey: "codex:submitted-data" }),
+      ]),
+    );
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: true,
+        showModelBreakdown: true,
+      }),
+      headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
+    });
+    expect(
+      (await json<any>(await api.request("/v1/public-profile/demo"))).enabled,
+    ).toBe(true);
+
+    const deleted = await json<any>(
+      await api.request("/v1/settings/submitted-data", {
+        method: "DELETE",
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const publicProfile = await json<any>(
+      await api.request("/v1/public-profile/demo"),
+    );
+    const privateSummary = await json<any>(
+      await api.request("/v1/dashboard/summary", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+
+    expect(deleted).toMatchObject({
+      deleted: true,
+      publicProfileEnabled: false,
+      leaderboardOptIn: false,
+    });
+    expect(publicProfile.enabled).toBe(false);
+    expect(privateSummary.totals.tokens).toBe(157);
   });
 });

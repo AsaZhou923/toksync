@@ -1,4 +1,8 @@
-import { formatCompactNumber, formatUsd } from "@toksync/shared";
+import {
+  formatCompactNumber,
+  formatUsd,
+  SOURCE_REGISTRY,
+} from "@toksync/shared";
 import {
   Activity,
   CalendarDays,
@@ -7,18 +11,36 @@ import {
   ExternalLink,
   MessageSquare,
   RotateCw,
+  ShieldCheck,
 } from "lucide-react";
-import { apiGet } from "../../lib/api";
+import {
+  apiGet,
+  type DashboardSummary,
+  type PublicProfileState,
+  type SyncRunsResponse,
+  type UsageDailyDay,
+  type UsageDailyResponse,
+} from "../../lib/api";
+import {
+  buildMergeCopilot,
+  buildPrivacyReceipt,
+  buildSourceHealthRows,
+} from "../../lib/v02";
 import { BreakdownPanel } from "../../components/BreakdownPanel";
+import { MergeCopilotPanel } from "../../components/MergeCopilotPanel";
 import { MetricCard } from "../../components/MetricCard";
-import { SignalPanel } from "../../components/SignalPanel";
+import { PrivacyReceiptPanel } from "../../components/PrivacyReceiptPanel";
+import { SourceHealthRadar } from "../../components/SourceHealthRadar";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppDashboardPage() {
-  const summary = await apiGet<any>("/v1/dashboard/summary");
-  const daily = await apiGet<any>("/v1/dashboard/usage-daily");
-  const syncRuns = await apiGet<any>("/v1/sync-runs");
+  const [summary, daily, syncRuns, publicProfile] = await Promise.all([
+    apiGet<DashboardSummary>("/v1/dashboard/summary"),
+    apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
+    apiGet<SyncRunsResponse>("/v1/sync-runs"),
+    apiGet<PublicProfileState>("/v1/public-profile"),
+  ]);
   const totals = summary?.totals ?? {
     tokens: 0,
     costUsd: 0,
@@ -39,22 +61,76 @@ export default async function AppDashboardPage() {
   const latestRunEvents = latestRun
     ? latestRun.insertedCount + latestRun.updatedCount + latestRun.skippedCount
     : 0;
+  const sourceRows = SOURCE_REGISTRY.map((source) => {
+    const row = summary?.topSources?.find((item) => item.key === source.id);
+    return {
+      id: source.id,
+      name: source.displayName,
+      tokens: row?.tokens ?? 0,
+      costUsd: row?.costUsd ?? 0,
+      active: Boolean(row),
+    };
+  });
+  const sourceMax = Math.max(1, ...sourceRows.map((row) => row.tokens));
+  const dayMax = Math.max(1, ...days.map((day) => day.tokens));
+  const integrityRows = [
+    {
+      title: "latest sync",
+      detail: summary?.lastSyncAt
+        ? new Date(summary.lastSyncAt).toLocaleString()
+        : "no completed sync yet",
+      tone: summary?.lastSyncAt ? "good" : "warn",
+      badge: latestRun?.status ?? "idle",
+    },
+    {
+      title: "run events",
+      detail: latestRun
+        ? `${latestRun.insertedCount} inserted, ${latestRun.updatedCount} updated, ${latestRun.skippedCount} skipped`
+        : "connect a device and run the fixture sync",
+      tone: latestRun ? "good" : "warn",
+      badge: latestRun ? String(latestRunEvents) : "0",
+    },
+    {
+      title: "payload contract",
+      detail:
+        "UsageBatchV1 keeps prompts, responses, tool output and raw paths out.",
+      tone: "good",
+      badge: "metrics",
+    },
+  ];
+  const mergeCopilot = buildMergeCopilot({
+    summary,
+    publicProfile,
+    latestRun,
+  });
+  const receipt = buildPrivacyReceipt({ summary, latestRun });
+  const sourceHealth = buildSourceHealthRows({ summary, latestRun });
+
   return (
     <div className="grid">
       <header className="page-head">
         <div>
-          <p className="page-kicker">private usage dashboard</p>
+          <p className="page-kicker">private usage console</p>
           <h1>AI coding usage</h1>
           <p className="lede">
-            See what your synced AI coding tools cost, which source is driving
-            usage, and whether the latest sync completed.
+            Scan multi-device AI coding usage, replay safety, source coverage,
+            private governance, and public sharing state from the v0.2 web
+            surface.
           </p>
           <span className="time-scope">{rangeLabel}</span>
         </div>
         <div className="page-actions">
+          <a className="btn" href="/app/merge">
+            <ShieldCheck size={16} />
+            Merge Copilot
+          </a>
           <a className="btn primary" href="/app/sync-runs">
             <RotateCw size={16} />
             Sync runs
+          </a>
+          <a className="btn" href="/app/exports">
+            <ExternalLink size={16} />
+            Local viewer
           </a>
           <a className="btn" href="/app/embed">
             <ExternalLink size={16} />
@@ -91,62 +167,136 @@ export default async function AppDashboardPage() {
           tone="violet"
         />
       </section>
-      <section className="grid grid-2">
-        <BreakdownPanel title="Top sources" rows={summary?.topSources ?? []} />
-        <BreakdownPanel title="Top models" rows={summary?.topModels ?? []} />
-      </section>
-      <section className="grid grid-2">
-        <SignalPanel
-          title="Daily token trend"
-          bars={days.map((day: any) => ({
-            label: day.date,
-            value: day.tokens,
-          }))}
-          empty="Run a sync to populate the daily trend."
-          footerRows={[
-            {
-              label: "top source",
-              value: summary?.topSources?.[0]?.key ?? "none",
-            },
-            {
-              label: "top model",
-              value: summary?.topModels?.[0]?.key ?? "none",
-            },
-            { label: "payload", value: "metrics only" },
-          ]}
-        />
-        <div className="card">
+      <section className="dashboard-grid">
+        <section className="card signal-card" data-testid="usage-trend">
           <div className="metric-row">
-            <h2 className="section-title">Sync status</h2>
-            <Clock3 size={18} />
+            <div>
+              <h2 className="section-title">Daily token trend</h2>
+              <p className="muted">
+                Replay-safe rollups by local day. Repeated syncs should move
+                skipped counts, not totals.
+              </p>
+            </div>
+            <span className="pill good">
+              <span className="status-dot" />
+              merged
+            </span>
           </div>
+          {days.length === 0 ? (
+            <div className="signal-empty">
+              Run a sync to populate the trend.
+            </div>
+          ) : (
+            <div
+              className="usage-bars"
+              role="img"
+              aria-label="Daily token totals"
+            >
+              {days.map((day: UsageDailyDay) => (
+                <span
+                  data-testid="trend-bar"
+                  key={day.date}
+                  title={`${day.date}: ${formatCompactNumber(day.tokens)} tokens`}
+                  style={{
+                    height: `${Math.max(8, (day.tokens / dayMax) * 100)}%`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
           <div className="console-stack">
             <div className="console-line">
-              <span>last sync</span>
-              <strong>
-                {summary?.lastSyncAt
-                  ? new Date(summary.lastSyncAt).toLocaleString()
-                  : "none"}
-              </strong>
+              <span>top source</span>
+              <strong>{summary?.topSources?.[0]?.key ?? "none"}</strong>
             </div>
             <div className="console-line">
-              <span>latest run</span>
-              <strong>{latestRun?.status ?? "none"}</strong>
+              <span>top model</span>
+              <strong>{summary?.topModels?.[0]?.key ?? "none"}</strong>
             </div>
             <div className="console-line">
-              <span>run events</span>
-              <strong>{latestRun ? String(latestRunEvents) : "none"}</strong>
-            </div>
-            <div className="console-line">
-              <span>workspace</span>
-              <strong>{summary?.topWorkspaces?.[0]?.key ?? "none"}</strong>
+              <span>payload</span>
+              <strong>metrics only</strong>
             </div>
           </div>
-          <a className="btn" href="/app/sync-runs">
+        </section>
+        <div className="card">
+          <div className="metric-row">
+            <h2 className="section-title">Sync integrity</h2>
+            <Clock3 size={18} />
+          </div>
+          <div className="integrity-list">
+            {integrityRows.map((row) => (
+              <div className="integrity-row" key={row.title}>
+                <div>
+                  <strong>{row.title}</strong>
+                  <span>{row.detail}</span>
+                </div>
+                <span className={`pill ${row.tone}`}>{row.badge}</span>
+              </div>
+            ))}
+          </div>
+          <a className="btn" href="/app/sync-runs" style={{ marginTop: 16 }}>
             <RotateCw size={16} />
             Sync runs
           </a>
         </div>
+      </section>
+      <section className="grid grid-3">
+        <div className="card">
+          <h2 className="section-title">Source coverage</h2>
+          <div className="source-grid">
+            {sourceRows.map((source) => (
+              <div className="source-item" key={source.id}>
+                <b>{source.name}</b>
+                <span className="bar-track">
+                  <span
+                    className="bar-fill"
+                    style={{
+                      width: `${Math.max(4, (source.tokens / sourceMax) * 100)}%`,
+                    }}
+                  />
+                </span>
+                <span className="muted">
+                  {source.active
+                    ? `${formatCompactNumber(source.tokens)} / ${formatUsd(source.costUsd)}`
+                    : "no events"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <MergeCopilotPanel items={mergeCopilot} href="/app/merge" />
+        <div className="card">
+          <h2 className="section-title">Public surface</h2>
+          <div className="public-proof-card">
+            <span className="muted">README profile</span>
+            <strong>{formatCompactNumber(totals.tokens)} tokens</strong>
+            <div>
+              {formatUsd(totals.costUsd)} cost /{" "}
+              {publicProfile?.enabled ? "public" : "private"} / aggregate only
+            </div>
+            <div className="control-pill-group">
+              <span className="pill">
+                cost {publicProfile?.showCost ? "on" : "off"}
+              </span>
+              <span className="pill">
+                sources {publicProfile?.showSourceBreakdown ? "on" : "off"}
+              </span>
+              <span className="pill">
+                models {publicProfile?.showModelBreakdown ? "on" : "off"}
+              </span>
+            </div>
+            <div className="proof-squares">
+              {Array.from({ length: 21 }).map((_, index) => (
+                <span key={index} />
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+      <section className="grid grid-2">
+        <PrivacyReceiptPanel receipt={receipt} />
+        <SourceHealthRadar rows={sourceHealth} compact />
       </section>
       <section className="grid">
         <div className="page-head">
@@ -163,7 +313,7 @@ export default async function AppDashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {(daily?.days ?? []).map((day: any) => (
+              {(daily?.days ?? []).map((day) => (
                 <tr key={day.date}>
                   <td>{day.date}</td>
                   <td>{formatCompactNumber(day.tokens)}</td>
@@ -174,6 +324,10 @@ export default async function AppDashboardPage() {
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="grid grid-2">
+        <BreakdownPanel title="Top sources" rows={summary?.topSources ?? []} />
+        <BreakdownPanel title="Top models" rows={summary?.topModels ?? []} />
       </section>
     </div>
   );

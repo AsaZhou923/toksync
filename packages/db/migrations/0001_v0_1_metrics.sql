@@ -55,6 +55,8 @@ create table if not exists device_codes (
   created_at timestamptz not null default now()
 );
 
+create index if not exists device_codes_cleanup_idx on device_codes(expires_at, consumed_at);
+
 create table if not exists sync_runs (
   id uuid primary key,
   client_run_id text not null,

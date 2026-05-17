@@ -1,10 +1,10 @@
-import { apiGet, USER } from "../../../lib/api";
+import { apiGet, USER, type DevicesResponse } from "../../../lib/api";
 import { DeviceActions } from "../../../components/DeviceActions";
 
 export const dynamic = "force-dynamic";
 
 export default async function DevicesPage() {
-  const data = await apiGet<any>("/v1/devices");
+  const data = await apiGet<DevicesResponse>("/v1/devices");
   const devices = data?.devices ?? [];
   return (
     <div className="grid">
@@ -27,7 +27,7 @@ export default async function DevicesPage() {
             </tr>
           </thead>
           <tbody>
-            {devices.map((device: any) => (
+            {devices.map((device) => (
               <tr key={device.id}>
                 <td>{device.name}</td>
                 <td>{device.platform}</td>

@@ -42,6 +42,18 @@ export interface DeviceTokenRecord {
   createdAt: string;
 }
 
+export interface UserApiTokenRecord {
+  id: string;
+  userId: string;
+  name: string;
+  tokenHash: string;
+  scopes: string[];
+  lastUsedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
 export interface DeviceCodeRecord {
   id: string;
   deviceCodeHash: string;
@@ -70,6 +82,59 @@ export interface SyncRunRecord {
   errorCount: number;
   startedAt: string;
   finishedAt?: string;
+}
+
+export interface SyncReceiptRecord {
+  id: string;
+  userId: string;
+  deviceId: string;
+  syncRunId: string;
+  clientRunId: string;
+  mode: "dry-run" | "sync";
+  status: "accepted" | "rejected";
+  uploadedFields: string[];
+  excludedFields: string[];
+  privacyChecks: Array<{ name: string; status: "pass" | "fail" }>;
+  payloadDigest: string;
+  sourceSummary: Record<string, number>;
+  resultSummary: {
+    inserted: number;
+    updated: number;
+    skipped: number;
+    errors: number;
+  };
+  createdAt: string;
+}
+
+export interface SourceHealthSnapshotRecord {
+  id: string;
+  userId: string;
+  deviceId?: string;
+  source: string;
+  status: "ok" | "stale" | "missing" | "permission_error" | "retention_risk";
+  lastSuccessfulSyncAt?: string;
+  lastEventAt?: string;
+  details: Record<string, string | number | boolean | null>;
+  recommendedAction?: string;
+  createdAt: string;
+}
+
+export interface MergeIssueRecord {
+  id: string;
+  userId: string;
+  type: "duplicate_history" | "identity_conflict" | "workspace_label_conflict";
+  status: "open" | "resolved" | "dismissed";
+  source?: string;
+  devices: string[];
+  affectedEvents: number;
+  affectedTokens: number;
+  suggestedAction:
+    | "confirm_duplicate"
+    | "split_device_identity"
+    | "rename_workspace"
+    | "dismiss";
+  createdAt: string;
+  resolvedAt?: string;
 }
 
 export interface StoredUsageEvent extends UsageEventV1 {
@@ -133,8 +198,12 @@ export interface TokSyncData {
   users: UserRecord[];
   devices: DeviceRecord[];
   deviceTokens: DeviceTokenRecord[];
+  userApiTokens: UserApiTokenRecord[];
   deviceCodes: DeviceCodeRecord[];
   syncRuns: SyncRunRecord[];
+  syncReceipts: SyncReceiptRecord[];
+  sourceHealthSnapshots: SourceHealthSnapshotRecord[];
+  mergeIssues: MergeIssueRecord[];
   usageEvents: StoredUsageEvent[];
   usageDaily: UsageDailyRecord[];
   profileStats: ProfileStatsRecord[];
@@ -146,8 +215,12 @@ export function emptyTokSyncData(): TokSyncData {
     users: [],
     devices: [],
     deviceTokens: [],
+    userApiTokens: [],
     deviceCodes: [],
     syncRuns: [],
+    syncReceipts: [],
+    sourceHealthSnapshots: [],
+    mergeIssues: [],
     usageEvents: [],
     usageDaily: [],
     profileStats: [],

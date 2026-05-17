@@ -32,6 +32,8 @@ export const SOURCE_REGISTRY: SourceDefinition[] = [
     defaultRelativePaths: [
       ".local/share/opencode/storage/message",
       "AppData/Roaming/opencode/storage/message",
+      "Library/Application Support/opencode/storage/message",
+      "Library/Application Support/opencode",
     ],
     patterns: ["*.json", "*.jsonl"],
   },

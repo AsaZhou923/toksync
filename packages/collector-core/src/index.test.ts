@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectUsageEvents, summarizeEvents } from "./index";
+import { collectUsageEvents, discoverSources, summarizeEvents } from "./index";
 
 const root = path.resolve("packages/test-fixtures");
 
@@ -227,6 +227,40 @@ describe("collector-core fixtures", () => {
     expect(partialResult.errors).toEqual([]);
   });
 
+  it("discovers configured source roots and rejects unsafe JSON keys", async () => {
+    const codexHome = mkdtempSync(path.join(tmpdir(), "toksync-codex-home-"));
+    const sessions = path.join(codexHome, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(path.join(sessions, "event.jsonl"), "{}\n");
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const locations = await discoverSources(["codex"]);
+      expect(locations).toHaveLength(1);
+      expect(locations[0]).toMatchObject({
+        source: "codex",
+        exists: true,
+        fileCount: 1,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previous;
+      }
+    }
+
+    const unsafe = writeFixture("codex", [
+      '{"__proto__":{"polluted":true},"tokens":{"input":1,"output":1}}',
+    ]);
+    const result = await collectUsageEvents({
+      deviceId: "device-1",
+      fixture: unsafe,
+    });
+    expect(result.events).toEqual([]);
+    expect(result.errors[0]?.message).toMatch(/Unsafe JSON key/);
+  });
+
   it("does not upload raw absolute workspace labels", async () => {
     const rawPath = "C:\\Users\\alice\\private-client\\source";
     const fixture = writeFixture("codex", [
@@ -267,6 +301,21 @@ describe("collector-core fixtures", () => {
     ]);
     expect(result.events[0]?.dedupKey).toBe(result.events[1]?.dedupKey);
     expect(result.events[0]?.dedupKey).toMatch(/^codex:/);
+  });
+
+  it("infers source from path segments instead of arbitrary substrings", async () => {
+    const fixture = writeFixture("notclaude", [
+      {
+        sourceSessionId: "session",
+        sourceMessageId: "m1",
+        modelId: "gpt-5.4",
+        timestampMs: 1770000000000,
+        tokens: { input: 1, output: 1 },
+      },
+    ]);
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    expect(result.errors).toEqual([]);
+    expect(result.events[0]?.source).toBe("codex");
   });
 });
 

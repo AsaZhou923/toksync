@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { cors } from "hono/cors";
 import {
   renderBadgeSvg,
@@ -11,8 +11,11 @@ import {
   apiError,
   deviceStartInputSchema,
   isValidUsername,
+  localPreviewInputSchema,
+  mergeIssueResolutionInputSchema,
   normalizeUsername,
   publicProfileInputSchema,
+  userApiTokenInputSchema,
 } from "@toksync/shared";
 
 export interface ApiAppOptions {
@@ -33,10 +36,18 @@ export function createApiApp(options: ApiAppOptions = {}) {
       allowHeaders: ["Authorization", "Content-Type", "X-TokSync-User"],
     }),
   );
+  app.use("*", rateLimit());
 
   app.get("/health", (c) =>
     c.json({ status: "ok", service: "api", timestamp: Date.now() }),
   );
+
+  app.get("/v1/auth/session", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json(repo.authSession(username));
+  });
 
   app.post("/v1/auth/device/start", async (c) => {
     const body = await c.req.json().catch(() => null);
@@ -80,6 +91,11 @@ export function createApiApp(options: ApiAppOptions = {}) {
       return c.json(apiError("not_found", "Device code not found"), 404);
     if (result.status === "expired")
       return c.json(apiError("expired_code", "Device code expired"), 410);
+    if (result.status === "consumed")
+      return c.json(
+        apiError("consumed_code", "Device code already consumed"),
+        409,
+      );
     return c.json(result);
   });
 
@@ -148,6 +164,89 @@ export function createApiApp(options: ApiAppOptions = {}) {
     return c.json({ runs: repo.listSyncRuns(username) });
   });
 
+  app.get("/v1/sync/receipts", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json({ receipts: repo.listSyncReceipts(username) });
+  });
+
+  app.get("/v1/sync/receipts/:id", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const receipt = repo.getSyncReceipt(username, c.req.param("id"));
+    if (!receipt)
+      return c.json(apiError("not_found", "Receipt not found"), 404);
+    return c.json({ receipt });
+  });
+
+  app.get("/v1/source-health", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json({ sources: repo.sourceHealth(username) });
+  });
+
+  app.get("/v1/merge/issues", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json({ issues: repo.mergeIssues(username) });
+  });
+
+  app.post("/v1/merge/issues/:id/resolve", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = mergeIssueResolutionInputSchema.safeParse(body);
+    if (!parsed.success)
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid merge resolution payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    const result = repo.resolveMergeIssue(
+      username,
+      c.req.param("id"),
+      parsed.data.action,
+    );
+    if (!result)
+      return c.json(apiError("not_found", "Merge issue not found"), 404);
+    return c.json(result);
+  });
+
+  app.get("/v1/exports", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const format = c.req.query("format") === "csv" ? "csv" : "json";
+    const exported = repo.exportMetrics(username, {
+      ...filtersFromUrl(c.req.url),
+      format,
+    });
+    if (!exported) return c.json(apiError("not_found", "User not found"), 404);
+    return new Response(exported.body, {
+      headers: {
+        "Content-Type": exported.contentType,
+        "Content-Disposition": `attachment; filename="${exported.fileName}"`,
+        "X-TokSync-Export-Rows": String(exported.rowCount),
+      },
+    });
+  });
+
+  app.post("/v1/local/preview", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = localPreviewInputSchema.safeParse(body);
+    const payload = parsed.success ? parsed.data.payload : body;
+    const result = repo.previewLocalPayload(payload);
+    return jsonResponse(result.response, result.status);
+  });
+
   app.get("/v1/devices", (c) => {
     const username = userFromRequest(c.req.raw, devAuth);
     if (!username)
@@ -170,6 +269,49 @@ export function createApiApp(options: ApiAppOptions = {}) {
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.revokeDevice(username, c.req.param("id"));
     if (!result) return c.json(apiError("not_found", "Device not found"), 404);
+    return c.json(result);
+  });
+
+  app.get("/v1/settings/tokens", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json({ tokens: repo.listUserApiTokens(username) });
+  });
+
+  app.post("/v1/settings/tokens", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = userApiTokenInputSchema.safeParse(body);
+    if (!parsed.success)
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid token creation payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    return c.json(repo.createUserApiToken(username, parsed.data), 201);
+  });
+
+  app.delete("/v1/settings/tokens/:id", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const result = repo.revokeUserApiToken(username, c.req.param("id"));
+    if (!result) return c.json(apiError("not_found", "Token not found"), 404);
+    return c.json(result);
+  });
+
+  app.delete("/v1/settings/submitted-data", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const result = repo.deleteSubmittedData(username);
+    if (!result) return c.json(apiError("not_found", "User not found"), 404);
     return c.json(result);
   });
 
@@ -352,4 +494,64 @@ function jsonResponse(payload: unknown, status = 200) {
       "Content-Type": "application/json; charset=utf-8",
     },
   });
+}
+
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+function rateLimit() {
+  const rateLimitBuckets = new Map<string, RateLimitBucket>();
+  return async (c: Context, next: Next) => {
+    const requestUrl = new URL(c.req.url);
+    const policy = rateLimitPolicy(requestUrl.pathname);
+    if (!policy) {
+      await next();
+      return;
+    }
+
+    const now = Date.now();
+    const key = `${clientKey(c.req.raw)}:${policy.name}`;
+    const bucket = rateLimitBuckets.get(key);
+    const current =
+      bucket && bucket.resetAt > now
+        ? bucket
+        : { count: 0, resetAt: now + policy.windowMs };
+    current.count += 1;
+    rateLimitBuckets.set(key, current);
+    if (current.count > policy.limit) {
+      c.header(
+        "Retry-After",
+        String(Math.ceil((current.resetAt - now) / 1000)),
+      );
+      return c.json(
+        apiError("rate_limited", "Too many requests; retry after the window"),
+        429,
+      );
+    }
+
+    await next();
+  };
+}
+
+function rateLimitPolicy(pathname: string) {
+  if (pathname.startsWith("/v1/auth/device/")) {
+    return { name: "auth-device", limit: 30, windowMs: 60_000 };
+  }
+  if (pathname === "/v1/sync/usage-batch") {
+    return { name: "sync-usage", limit: 120, windowMs: 60_000 };
+  }
+  if (pathname.startsWith("/v1/")) {
+    return { name: "api", limit: 600, windowMs: 60_000 };
+  }
+  return null;
+}
+
+function clientKey(request: Request) {
+  return (
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "local"
+  );
 }

@@ -6,6 +6,7 @@ coverage/
 .omx/
 .env
 .tmp/
+.playwright-mcp/
 output/
 *.tsbuildinfo
 *.log

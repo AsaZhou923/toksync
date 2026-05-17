@@ -1,10 +1,10 @@
 import { formatCompactNumber, formatUsd } from "@toksync/shared";
-import { apiGet } from "../../../lib/api";
+import { apiGet, type DashboardBreakdowns } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProjectsPage() {
-  const data = await apiGet<any>("/v1/dashboard/breakdowns");
+  const data = await apiGet<DashboardBreakdowns>("/v1/dashboard/breakdowns");
   return <BreakdownTable title="Projects" rows={data?.workspaces ?? []} />;
 }
 

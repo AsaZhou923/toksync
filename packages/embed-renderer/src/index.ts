@@ -28,6 +28,8 @@ export interface CardOptions {
   metric?: "tokens" | "cost";
 }
 
+let badgeSvgCounter = 0;
+
 function escapeXml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -57,15 +59,18 @@ export function renderBadgeSvg(
   const valueWidth = Math.max(58, value.length * 8 + 18);
   const labelWidth = Math.max(62, label.length * 8 + 20);
   const width = labelWidth + valueWidth;
+  const idPrefix = `toksync-badge-${(badgeSvgCounter += 1).toString(36)}`;
+  const gradientId = `${idPrefix}-shade`;
+  const clipId = `${idPrefix}-clip`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" role="img" aria-label="${label}: ${escapeXml(value)}">
   <title>${label}: ${escapeXml(value)}</title>
-  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-opacity=".12"/></linearGradient>
-  <clipPath id="r"><rect width="${width}" height="20" rx="${radius}" fill="#fff"/></clipPath>
-  <g clip-path="url(#r)">
+  <linearGradient id="${gradientId}" x2="0" y2="100%"><stop offset="0" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-opacity=".12"/></linearGradient>
+  <clipPath id="${clipId}"><rect width="${width}" height="20" rx="${radius}" fill="#fff"/></clipPath>
+  <g clip-path="url(#${clipId})">
     <rect width="${labelWidth}" height="20" fill="#374151"/>
     <rect x="${labelWidth}" width="${valueWidth}" height="20" fill="${color}"/>
-    <rect width="${width}" height="20" fill="url(#s)"/>
+    <rect width="${width}" height="20" fill="url(#${gradientId})"/>
   </g>
   <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,sans-serif" font-size="11">
     <text x="${labelWidth / 2}" y="15">${label}</text>

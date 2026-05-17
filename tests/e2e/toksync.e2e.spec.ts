@@ -38,6 +38,7 @@ test.describe("TokSync local agent flow", () => {
     ]);
     expect(dryRun.stdout).toContain("Events: 2");
     expect(dryRun.stdout).toContain("Tokens: 2640");
+    expect(dryRun.stdout).toContain("Receipt digest: sha256:");
 
     const firstSync = await runPnpm([
       "agent",
@@ -68,7 +69,7 @@ test.describe("TokSync local agent flow", () => {
     await expect(
       page.getByRole("heading", { name: "README embed" }),
     ).toBeVisible();
-    await expect(page.locator(".svg-preview img")).toHaveCount(3);
+    await expect(page.locator(".svg-preview img")).toHaveCount(2);
     await expect(page.getByTestId("badge-snippet")).toContainText(
       `${apiUrl}/v1/badge/demo.svg?metric=tokens`,
     );
@@ -84,6 +85,18 @@ test.describe("TokSync local agent flow", () => {
     await page.goto("/u/demo");
     await expect(page.getByRole("heading", { name: "@demo" })).toBeVisible();
     await expect(page.locator(".svg-preview img")).toHaveCount(2);
+
+    await page.goto("/app/receipts");
+    await expect(page.getByRole("heading", { name: "Receipts" })).toBeVisible();
+    await expect(page.getByText("sha256:").first()).toBeVisible();
+    await page.goto("/app/health");
+    await expect(
+      page.getByRole("heading", { name: "Source Health" }),
+    ).toBeVisible();
+    await page.goto("/app/merge");
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Merge Copilot" }),
+    ).toBeVisible();
 
     const config = JSON.parse(
       await fs.readFile(path.join(configDir, "config.json"), "utf8"),

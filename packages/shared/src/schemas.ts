@@ -51,6 +51,30 @@ export const publicProfileInputSchema = z.object({
   showModelBreakdown: z.boolean().default(false),
 });
 
+export const userApiTokenInputSchema = z.object({
+  name: z.string().min(1).max(80).default("TokSync API token"),
+  scopes: z
+    .array(z.enum(["usage:write", "export:read"]))
+    .min(1)
+    .max(2)
+    .default(["usage:write"]),
+  expiresAt: z.string().datetime().optional(),
+});
+
+export const mergeIssueResolutionInputSchema = z.object({
+  action: z.enum([
+    "confirm_duplicate",
+    "split_device_identity",
+    "rename_workspace",
+    "dismiss",
+  ]),
+  workspaceLabel: z.string().min(1).max(160).optional(),
+});
+
+export const localPreviewInputSchema = z.object({
+  payload: z.unknown(),
+});
+
 export const deviceStartInputSchema = z.object({
   deviceName: z.string().min(1).max(160),
   platform: z.enum(["windows", "macos", "linux"]),
@@ -65,4 +89,9 @@ export type UsageBatchV1 = z.infer<typeof usageBatchV1Schema> & {
 };
 export type UsageBatchEnvelope = z.infer<typeof usageBatchV1Schema>;
 export type PublicProfileInput = z.infer<typeof publicProfileInputSchema>;
+export type UserApiTokenInput = z.infer<typeof userApiTokenInputSchema>;
+export type MergeIssueResolutionInput = z.infer<
+  typeof mergeIssueResolutionInputSchema
+>;
+export type LocalPreviewInput = z.infer<typeof localPreviewInputSchema>;
 export type DeviceStartInput = z.infer<typeof deviceStartInputSchema>;

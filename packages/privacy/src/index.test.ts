@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   assertMetricsOnlyPayload,
+  hashOpaqueValue,
   hashWorkspacePath,
+  sha256Base64Url,
   workspaceLabelFromPath,
 } from "./index";
 
@@ -26,5 +28,31 @@ describe("privacy helpers", () => {
         ],
       }),
     ).toThrow(/toolArguments/);
+    expect(() =>
+      assertMetricsOnlyPayload(JSON.parse('{"\\u0070rompt":"escaped"}')),
+    ).toThrow(/prompt/);
+    expect(() =>
+      assertMetricsOnlyPayload({
+        events: [{ systemPrompt: "secret", diff: "patch text" }],
+      }),
+    ).toThrow(/systemPrompt/);
+    expect(() =>
+      assertMetricsOnlyPayload(
+        { events: [{ customSecret: "x" }] },
+        {
+          forbiddenKeys: ["customSecret"],
+        },
+      ),
+    ).toThrow(/customSecret/);
+  });
+
+  it("hashes opaque values and raw bytes deterministically", () => {
+    expect(hashOpaqueValue("token", "secret")).toBe(
+      hashOpaqueValue("token", "secret"),
+    );
+    expect(hashOpaqueValue("token", "secret")).not.toBe(
+      hashOpaqueValue("token", "other"),
+    );
+    expect(sha256Base64Url("payload")).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 });

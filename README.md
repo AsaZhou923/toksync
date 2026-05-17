@@ -1,60 +1,99 @@
-# TokSync
+<p align="center">
+  <img src="docs/assets/toksync-dashboard-preview.png" alt="TokSync dashboard preview" width="920" />
+</p>
 
-TokSync v0.1 is a metrics-only telemetry hub for AI coding tools. It syncs token,
-cost, model, source, device, and workspace-label usage across machines without
-uploading prompts, assistant responses, tool arguments, tool output, file
-content, secrets, or raw project paths.
+<h1 align="center">TokSync</h1>
 
-The current repository is a working local v0.1 monorepo. It favors a fast,
-file-backed development loop while keeping the Postgres schema and deployment
-path documented for the hosted version.
+<p align="center">
+  Private-first AI coding usage sync for Codex CLI, Claude Code, and OpenCode.
+  Metrics move across devices; prompts, replies, tool output, secrets, and raw
+  project paths do not.
+</p>
 
-## What Exists Now
+<p align="center">
+  <a href="./README.zh-CN.md">中文</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#privacy-contract">Privacy contract</a>
+  ·
+  <a href="#roadmap-boundaries">Roadmap boundaries</a>
+</p>
 
-- Local CLI agent with `login`, `logout`, `status`, `sources list`,
-  `sync --dry-run`, and `sync`.
-- TypeScript collectors for Codex CLI, Claude Code, and OpenCode-style usage
-  files, plus synthetic fixtures.
-- Hono API for device login, device-token auth, idempotent usage ingestion,
-  dashboard queries, device deletion/revoke, and public profile settings.
-- File-backed development repository at `.tmp/toksync-dev.json` by default.
-- Forward SQL migration for the planned Postgres deployment path.
-- Next.js dashboard, device authorization pages, docs pages, public profile,
-  README badge, and README profile-card flows.
-- SVG badge/profile-card renderer with public/private boundary tests.
-- Vitest, Playwright E2E, visual smoke, and performance smoke coverage.
-- `AGENTS.md` with project-specific guidance for future coding agents.
+<p align="center">
+  <img alt="stage" src="https://img.shields.io/badge/stage-v0.2-0f7b59?style=flat-square" />
+  <img alt="payload" src="https://img.shields.io/badge/payload-metrics--only-315fbd?style=flat-square" />
+  <img alt="public data" src="https://img.shields.io/badge/public%20data-opt--in-b66f09?style=flat-square" />
+  <img alt="package manager" src="https://img.shields.io/badge/pnpm-9.15.9-f69220?style=flat-square" />
+</p>
 
-## v0.1 Scope
+## What TokSync Is
 
-In scope:
+TokSync v0.2 is a local-first telemetry hub for AI coding tools. It aggregates
+token counts, approximate cost, model, source, device, and workspace-label usage
+across machines while keeping private content out of the sync payload.
 
-- Metrics-only multi-device sync.
-- Codex CLI, Claude Code, and OpenCode source adapters.
-- Dry-run preview before upload.
-- Idempotent usage ingestion and repeat-sync safety.
-- Private dashboard rollups.
-- Device revoke and device data deletion.
-- Public profile opt-in.
-- GitHub README SVG badge/profile card.
+The product direction follows Tokscale's strong usage/profile/README embed loop,
+but TokSync's default path is private multi-device aggregation. Public profile,
+README badge/card, and any future leaderboard remain explicit opt-in layers.
 
-Out of scope for v0.1:
+## Current Console
 
-- Default conversation/content sync.
-- Full-text or semantic search.
-- Eval dataset export.
-- Team workspace, RBAC, or organization reports.
-- Leaderboard implementation.
-- Billing, subscriptions, payment integration, plan limits, or billing UI.
+| Surface            | Current behavior                                                |
+| ------------------ | --------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run |
+| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures  |
+| API                | Device login, user API tokens, receipts, health, merge, export  |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default        |
+| Web                | Dashboard, devices, health, receipts, merge, local viewer       |
+| Public output      | README badge/profile-card SVG from public aggregate cache only  |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks  |
+
+## Quick Start
+
+```bash
+pnpm install
+cp .env.example .env
+pnpm db:reset
+pnpm db:seed
+pnpm dev
+```
+
+In another terminal:
+
+```bash
+pnpm agent login --auto-authorize demo
+pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic
+pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+```
+
+The first sync inserts usage events. Repeating the same sync should skip the
+same events instead of double-counting totals.
+
+Headless/private sync can use a user API token created from settings or the API:
+
+```bash
+pnpm agent login --token tsu_...
+TOKSYNC_API_TOKEN=tsu_... pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+```
+
+Default local services:
+
+| Service | URL                   |
+| ------- | --------------------- |
+| Web     | http://localhost:3000 |
+| API     | http://localhost:4000 |
+| Worker  | http://localhost:4100 |
 
 ## Architecture
 
 ```text
 apps/
-  agent/       CLI sync agent
+  agent/       Commander CLI sync agent
   api/         Hono API service
-  web/         Next.js app
+  web/         Next.js App Router UI
   worker/      Worker/health surface
+
 packages/
   shared/      Zod contracts, source ids, formatting, shared errors
   collector-core/
@@ -68,41 +107,41 @@ packages/
                Synthetic parser fixtures
 ```
 
-Workspace imports are intentionally checked by `pnpm check:boundaries`.
-When adding a new app, package, or package-to-package dependency, update
-`scripts/check-package-boundaries.ts` in the same change so the dependency
-direction stays explicit and reviewable.
-
 The active local store is `FileTokSyncStore`, controlled by `TOKSYNC_DB_FILE`.
 `packages/db/migrations/0001_v0_1_metrics.sql` is the current forward SQL shape
-for hosted Postgres.
+for the hosted Postgres target.
 
-## Quick Start
+## Privacy Contract
 
-```bash
-pnpm install
-cp .env.example .env
-pnpm db:reset
-pnpm db:seed
-pnpm dev
-```
+- Public profile is disabled by default.
+- README badge/profile-card endpoints read public aggregate state only.
+- Public output must not expose device names, raw paths, workspace hashes,
+  source session ids, message ids, message text, tool arguments, or tool output.
+- Device fingerprinting must not derive from hardware identifiers, hostname,
+  username, home path, or project path.
+- Cost is approximate usage estimation, not provider billing truth.
+- Content sync, search, eval export, leaderboard, cost guardrails, vault, and
+  proof-pack workflows are future opt-in features, not current behavior.
 
-Default local services:
+## Roadmap Boundaries
 
-- Web: http://localhost:3000
-- API: http://localhost:4000
-- Worker health: http://localhost:4100
+The external specs track Tokscale parity and TokSync-specific governance
+features. The v0.2 private governance slice is implemented locally; later
+public and cost-governance items remain scoped out:
 
-In another terminal:
+| Phase | Planned capability   | Boundary                                       |
+| ----- | -------------------- | ---------------------------------------------- |
+| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries |
+| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups  |
+| v0.2  | Source Health Radar  | Implemented for source sync status/freshness   |
+| v0.2  | User API token       | Implemented for private/headless metrics sync  |
+| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs       |
+| v0.3  | Cost Guardrails      | Flag spikes, unknown pricing, budget drift     |
+| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore           |
+| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates   |
 
-```bash
-pnpm agent login --auto-authorize demo
-pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic
-pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
-```
-
-The first sync should insert events. Repeating the same sync should skip the
-same events rather than double-counting totals.
+Leaderboard, billing, subscriptions, payment providers, plan limits, and billing
+UI are out of scope for v0.1.
 
 ## Useful Commands
 
@@ -119,7 +158,7 @@ pnpm test:perf
 pnpm test:full
 ```
 
-Database/dev data commands:
+Database/dev data:
 
 ```bash
 pnpm db:reset
@@ -136,22 +175,14 @@ pnpm agent logout
 TOKSYNC_CONFIG_DIR=.tmp/toksync-agent pnpm agent status
 ```
 
-## Privacy Rules
+## Project Docs
 
-- Public profile is disabled by default.
-- README badge/profile-card endpoints must only read public aggregate state.
-- Public output must not expose device names, raw project paths, workspace
-  hashes, source session ids, message ids, message text, tool arguments, or tool
-  output.
-- Device fingerprinting must not derive from hardware identifiers, hostname,
-  username, home path, or project path.
-- Content sync and leaderboard are future opt-in features, not v0.1 behavior.
-
-## Documentation
-
-- Project specs: `E:\Project Code\docs\01 - Projects\TokSync`
-- Agent operating guide: `AGENTS.md`
-- Current quick-start and repository status: this README
+- Product specs: `E:\Project Code\docs\01 - Projects\TokSync`
+- Current feature guide:
+  `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- Latest docs change list:
+  `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+- Agent guide: `AGENTS.md`
 
 When external docs and code disagree, treat the docs as product intent and the
 repository as current implementation truth. Update both when changing product

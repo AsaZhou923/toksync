@@ -11,6 +11,87 @@ function createRepo() {
 }
 
 describe("TokSyncRepository", () => {
+  it("rejects production startup with default repository secrets", () => {
+    const previous = process.env.NODE_ENV;
+    const previousSecrets = {
+      TOKEN_HASH_SECRET: process.env.TOKEN_HASH_SECRET,
+      DEVICE_CODE_SECRET: process.env.DEVICE_CODE_SECRET,
+      DEVICE_FINGERPRINT_PEPPER: process.env.DEVICE_FINGERPRINT_PEPPER,
+    };
+    process.env.NODE_ENV = "production";
+    delete process.env.TOKEN_HASH_SECRET;
+    delete process.env.DEVICE_CODE_SECRET;
+    delete process.env.DEVICE_FINGERPRINT_PEPPER;
+    try {
+      expect(() => new TokSyncRepository()).toThrow(/TOKEN_HASH_SECRET/);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previous;
+      }
+      for (const [key, value] of Object.entries(previousSecrets)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
+  it("returns a consumed status after device-code token issuance", () => {
+    const repo = createRepo();
+    const started = repo.createDeviceCode({
+      deviceName: "Test device",
+      platform: "windows",
+      agentVersion: "0.1.0",
+      deviceFingerprint: "fingerprint",
+    });
+    repo.authorizeDeviceCode(started.userCode, "demo");
+    expect(repo.pollDeviceCode(started.deviceCode).status).toBe("authorized");
+    expect(repo.pollDeviceCode(started.deviceCode)).toEqual({
+      status: "consumed",
+    });
+  });
+
+  it("prevents stale FileStore writes from overwriting concurrent disk changes", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
+    const file = path.join(dir, "db.json");
+    const firstStore = new FileTokSyncStore(file);
+    const secondStore = new FileTokSyncStore(file);
+    firstStore.reset();
+    const firstData = firstStore.read();
+    const secondData = secondStore.read();
+    sleepSync(10);
+
+    firstData.users.push({
+      id: "user-1",
+      username: "demo",
+      usernameLower: "demo",
+      publicProfileEnabled: false,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    });
+    firstStore.write(firstData);
+
+    secondData.users.push({
+      id: "user-2",
+      username: "other",
+      usernameLower: "other",
+      publicProfileEnabled: false,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    });
+    expect(() => secondStore.write(secondData)).toThrow(/changed on disk/);
+  });
+
   it("keeps usage ingestion idempotent and recomputes after device deletion", () => {
     const repo = createRepo();
     const started = repo.createDeviceCode({
@@ -167,3 +248,7 @@ describe("TokSyncRepository", () => {
     expect(repo.dashboardSummary("demo")?.totals.costUsd).toBe(0.01);
   });
 });
+
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}

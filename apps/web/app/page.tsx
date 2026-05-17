@@ -1,34 +1,99 @@
-import { apiGet } from "../lib/api";
-import { SignalPanel } from "../components/SignalPanel";
+import { apiGet, type HealthResponse } from "../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const health = await apiGet<{ status: string }>("/health");
+  const health = await apiGet<HealthResponse>("/health").catch(() => null);
   return (
     <div className="band hero">
       <section className="hero-panel">
-        <p className="page-kicker">local telemetry hub</p>
+        <p className="page-kicker">private usage console</p>
         <h1>TokSync</h1>
         <p className="lede">
-          Metrics-only sync for AI coding usage across Codex CLI, Claude Code
-          and OpenCode.
+          Tokscale-style AI coding usage visibility, rebuilt around private
+          multi-device sync. v0.1 collects metrics only, keeps content out of
+          payloads, and publishes README SVGs only after opt-in.
         </p>
-        <div className="command">
-          pnpm agent login --auto-authorize demo && pnpm agent sync --fixture
-          ./packages/test-fixtures/codex/basic
+        <div className="hero-terminal" aria-label="TokSync quick start">
+          <div className="terminal-line">
+            <span>$</span> pnpm agent login --auto-authorize demo
+          </div>
+          <div className="terminal-line">
+            <span>$</span> pnpm agent sync --dry-run --fixture
+            ./packages/test-fixtures/codex/basic
+          </div>
+          <div className="terminal-line">
+            <span>$</span> pnpm agent sync --fixture
+            ./packages/test-fixtures/codex/basic
+          </div>
+        </div>
+        <div className="toolbar" style={{ marginTop: 18 }}>
+          <a className="btn primary" href="/app">
+            Open console
+          </a>
+          <a className="btn" href="/docs/getting-started">
+            Quick start
+          </a>
         </div>
       </section>
-      <aside className="grid">
-        <SignalPanel
-          title={health?.status === "ok" ? "api online" : "api offline"}
-          empty="Connect a device to start collecting usage."
-          footerRows={[
-            { label: "sources", value: "codex / claude / opencode" },
-            { label: "payload", value: "metrics only" },
-            { label: "public data", value: "opt-in" },
-          ]}
-        />
+      <aside className="hero-preview">
+        <div className="metric-row">
+          <span className="pill good">
+            <span className="status-dot" />
+            {health?.status === "ok" ? "api online" : "api offline"}
+          </span>
+          <span className="muted">v0.1</span>
+        </div>
+        <div className="preview-chart" aria-label="usage preview">
+          {[34, 48, 30, 62, 74, 51, 83, 92, 57, 79, 88, 66].map(
+            (height, index) => (
+              <span
+                key={index}
+                style={{ height: `${height}%` }}
+                title={`${height}% activity`}
+              />
+            ),
+          )}
+        </div>
+        <div className="preview-grid">
+          <div className="preview-tile">
+            <span className="muted">sources</span>
+            <strong>3</strong>
+          </div>
+          <div className="preview-tile">
+            <span className="muted">payload</span>
+            <strong>metrics</strong>
+          </div>
+          <div className="preview-tile">
+            <span className="muted">public</span>
+            <strong>opt-in</strong>
+          </div>
+        </div>
+        <div className="proof-list">
+          <div className="proof-row">
+            <div>
+              <strong>Dry-run first</strong>
+              <span>
+                Preview source, date range, tokens, cost, and warnings.
+              </span>
+            </div>
+            <span className="pill good">ready</span>
+          </div>
+          <div className="proof-row">
+            <div>
+              <strong>Repeat-safe sync</strong>
+              <span>Stable dedup keys keep replay from double-counting.</span>
+            </div>
+            <span className="pill good">ready</span>
+          </div>
+          <div className="proof-row">
+            <div>
+              <strong>Privacy receipts</strong>
+              <span>Field-level upload proof is planned after v0.1.</span>
+            </div>
+            <span className="pill warn">v0.2</span>
+          </div>
+        </div>
       </aside>
     </div>
   );

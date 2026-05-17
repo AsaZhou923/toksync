@@ -1,10 +1,10 @@
 import { formatCompactNumber, formatUsd } from "@toksync/shared";
-import { apiGet } from "../../../lib/api";
+import { apiGet, type UsageDailyResponse } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function ActivityPage() {
-  const daily = await apiGet<any>("/v1/dashboard/usage-daily");
+  const daily = await apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily");
   return (
     <div className="grid">
       <header className="page-head">
@@ -24,7 +24,7 @@ export default async function ActivityPage() {
             </tr>
           </thead>
           <tbody>
-            {(daily?.days ?? []).map((day: any) => (
+            {(daily?.days ?? []).map((day) => (
               <tr key={day.date}>
                 <td>{day.date}</td>
                 <td>{formatCompactNumber(day.tokens)}</td>
@@ -32,7 +32,7 @@ export default async function ActivityPage() {
                 <td>
                   {Object.entries(day.sourceBreakdown)
                     .map(
-                      ([source, value]: any) =>
+                      ([source, value]) =>
                         `${source}: ${formatCompactNumber(value.tokens)}`,
                     )
                     .join(" | ")}

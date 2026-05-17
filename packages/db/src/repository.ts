@@ -3,28 +3,40 @@ import {
   apiError,
   isValidUsername,
   normalizeUsername,
+  SOURCE_REGISTRY,
   publicProfileInputSchema,
   totalTokens,
+  userApiTokenInputSchema,
   usageBatchV1Schema,
   usageEventV1Schema,
   type DeviceStartInput,
   type PublicProfileInput,
-  type UsageBatchV1,
+  type UserApiTokenInput,
+  type UsageBatchEnvelope,
   type UsageEventV1,
 } from "@toksync/shared";
-import { hashOpaqueValue } from "@toksync/privacy";
+import {
+  FORBIDDEN_CONTENT_KEYS,
+  assertMetricsOnlyPayload,
+  hashOpaqueValue,
+  sha256Base64Url,
+} from "@toksync/privacy";
 import { FileTokSyncStore } from "./store";
 import type {
   BreakdownRow,
   DeviceRecord,
   DeviceTokenRecord,
+  MergeIssueRecord,
   ProfileStatsRecord,
   PublicProfileStatsRecord,
+  SourceHealthSnapshotRecord,
   StoredUsageEvent,
+  SyncReceiptRecord,
   SyncRunRecord,
   TokSyncData,
   UsageDailyRecord,
   UserRecord,
+  UserApiTokenRecord,
 } from "./types";
 
 export interface RepositorySecrets {
@@ -39,16 +51,35 @@ export interface AuthContext {
   token: DeviceTokenRecord;
 }
 
+export interface UserApiTokenAuthContext {
+  user: UserRecord;
+  token: UserApiTokenRecord;
+}
+
+const DEV_SECRET = "dev-secret-change-me";
+
+function resolveRepositorySecrets(): RepositorySecrets {
+  return {
+    tokenHashSecret: requireSecret("TOKEN_HASH_SECRET"),
+    deviceCodeSecret: requireSecret("DEVICE_CODE_SECRET"),
+    deviceFingerprintPepper: requireSecret("DEVICE_FINGERPRINT_PEPPER"),
+  };
+}
+
+function requireSecret(name: keyof NodeJS.ProcessEnv) {
+  const value = process.env[name] || DEV_SECRET;
+  if (process.env.NODE_ENV === "production" && value === DEV_SECRET) {
+    throw new Error(
+      `${name} must be set to a non-default value before starting TokSync in production`,
+    );
+  }
+  return value;
+}
+
 export class TokSyncRepository {
   constructor(
     private readonly store = new FileTokSyncStore(),
-    private readonly secrets: RepositorySecrets = {
-      tokenHashSecret: process.env.TOKEN_HASH_SECRET || "dev-secret-change-me",
-      deviceCodeSecret:
-        process.env.DEVICE_CODE_SECRET || "dev-secret-change-me",
-      deviceFingerprintPepper:
-        process.env.DEVICE_FINGERPRINT_PEPPER || "dev-secret-change-me",
-    },
+    private readonly secrets: RepositorySecrets = resolveRepositorySecrets(),
   ) {}
 
   reset() {
@@ -56,6 +87,8 @@ export class TokSyncRepository {
   }
 
   seedDevelopmentUser(username = "demo") {
+    const existing = this.getUser(username);
+    if (existing?.displayName) return existing;
     const user = this.ensureUser(username, { displayName: "Demo Developer" });
     this.recomputeUser(user.id);
     return user;
@@ -96,6 +129,7 @@ export class TokSyncRepository {
 
   createDeviceCode(input: DeviceStartInput) {
     const data = this.store.read();
+    pruneDeviceCodesInData(data);
     const deviceCode = `dev_${randomBytes(24).toString("base64url")}`;
     const userCode = `TS-${randomBytes(2).toString("hex").toUpperCase()}`;
     const now = new Date();
@@ -124,11 +158,18 @@ export class TokSyncRepository {
 
   authorizeDeviceCode(userCode: string, username = "demo") {
     const data = this.store.read();
+    const pruned = pruneDeviceCodesInData(data);
     const code = data.deviceCodes.find(
       (item) => item.userCode.toUpperCase() === userCode.toUpperCase(),
     );
-    if (!code) return null;
-    if (Date.parse(code.expiresAt) < Date.now()) return null;
+    if (!code) {
+      if (pruned) this.store.write(data);
+      return null;
+    }
+    if (Date.parse(code.expiresAt) < Date.now()) {
+      if (pruned) this.store.write(data);
+      return null;
+    }
     if (code.consumedAt) return null;
     const user = this.ensureUser(username, {
       displayName: username === "demo" ? "Demo Developer" : username,
@@ -140,13 +181,17 @@ export class TokSyncRepository {
 
   pollDeviceCode(deviceCode: string) {
     const data = this.store.read();
+    const pruned = pruneDeviceCodesInData(data);
     const code = data.deviceCodes.find(
       (item) => item.deviceCodeHash === this.hashDeviceCode(deviceCode),
     );
-    if (!code) return { status: "not_found" as const };
+    if (!code) {
+      if (pruned) this.store.write(data);
+      return { status: "not_found" as const };
+    }
     if (Date.parse(code.expiresAt) < Date.now())
       return { status: "expired" as const };
-    if (code.consumedAt) return { status: "not_found" as const };
+    if (code.consumedAt) return { status: "consumed" as const };
     if (!code.authorizedUserId)
       return { status: "pending" as const, interval: 2 };
 
@@ -223,6 +268,81 @@ export class TokSyncRepository {
     return { user, device, token };
   }
 
+  authenticateUserApiToken(
+    rawToken?: string | null,
+  ): UserApiTokenAuthContext | null {
+    if (!rawToken?.startsWith("tsu_")) return null;
+    const data = this.store.read();
+    const tokenHash = this.hashToken(rawToken);
+    const token = data.userApiTokens.find((item) =>
+      constantTimeEqual(item.tokenHash, tokenHash),
+    );
+    if (!token || token.revokedAt) return null;
+    if (token.expiresAt && Date.parse(token.expiresAt) < Date.now())
+      return null;
+    const user = data.users.find((item) => item.id === token.userId);
+    if (!user) return null;
+    token.lastUsedAt = new Date().toISOString();
+    this.store.write(data);
+    return { user, token };
+  }
+
+  listUserApiTokens(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    return data.userApiTokens
+      .filter((token) => token.userId === user.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(userApiTokenMetadataView);
+  }
+
+  createUserApiToken(username: string, rawInput: UserApiTokenInput) {
+    const input = userApiTokenInputSchema.parse(rawInput);
+    const data = this.store.read();
+    const user = this.ensureUser(username);
+    const now = new Date().toISOString();
+    const rawToken = `tsu_${randomBytes(32).toString("base64url")}`;
+    const token: UserApiTokenRecord = {
+      id: randomUUID(),
+      userId: user.id,
+      name: input.name,
+      tokenHash: this.hashToken(rawToken),
+      scopes: [...new Set(input.scopes)],
+      createdAt: now,
+    };
+    if (input.expiresAt) token.expiresAt = input.expiresAt;
+    data.userApiTokens.push(token);
+    this.store.write(data);
+    return { token: rawToken, metadata: userApiTokenMetadataView(token) };
+  }
+
+  revokeUserApiToken(username: string, tokenId: string) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    const token = user
+      ? data.userApiTokens.find(
+          (item) => item.userId === user.id && item.id === tokenId,
+        )
+      : undefined;
+    if (!user || !token) return null;
+    token.revokedAt = new Date().toISOString();
+    this.store.write(data);
+    return { status: "revoked" };
+  }
+
+  authSession(username = "demo") {
+    const user = this.getUser(username) ?? this.seedDevelopmentUser(username);
+    return {
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+      },
+    };
+  }
+
   getSyncState(rawToken?: string | null) {
     const auth = this.authenticateDevice(rawToken);
     if (!auth) return null;
@@ -264,14 +384,6 @@ export class TokSyncRepository {
   }
 
   ingestUsageBatch(rawToken: string | undefined, rawPayload: unknown) {
-    const auth = this.authenticateDevice(rawToken);
-    if (!auth)
-      return {
-        ok: false as const,
-        response: apiError("invalid_auth", "Invalid or revoked device token"),
-        status: 401,
-      };
-
     const envelope = usageBatchV1Schema.safeParse(rawPayload);
     if (!envelope.success) {
       return {
@@ -284,22 +396,44 @@ export class TokSyncRepository {
         status: 400,
       };
     }
+    try {
+      assertMetricsOnlyPayload(rawPayload);
+    } catch (error) {
+      return {
+        ok: false as const,
+        response: apiError(
+          "privacy_violation",
+          error instanceof Error
+            ? error.message
+            : "Payload contains forbidden content fields",
+        ),
+        status: 400,
+      };
+    }
 
     const data = this.store.read();
     const batch = envelope.data;
+    const usageAuth = this.authenticateUsageWriter(data, rawToken, batch);
+    if (!usageAuth)
+      return {
+        ok: false as const,
+        response: apiError("invalid_auth", "Invalid or revoked write token"),
+        status: 401,
+      };
+    const { user, device } = usageAuth;
     const now = new Date().toISOString();
     let syncRun = data.syncRuns.find(
       (run) =>
-        run.userId === auth.user.id &&
-        run.deviceId === auth.device.id &&
+        run.userId === user.id &&
+        run.deviceId === device.id &&
         run.clientRunId === batch.runId,
     );
     if (!syncRun) {
       syncRun = {
         id: randomUUID(),
         clientRunId: batch.runId,
-        userId: auth.user.id,
-        deviceId: auth.device.id,
+        userId: user.id,
+        deviceId: device.id,
         mode: batch.mode,
         status: "started",
         sourceSummary: {},
@@ -317,6 +451,7 @@ export class TokSyncRepository {
     let updated = 0;
     let skipped = 0;
     const sourceSummary: Record<string, number> = {};
+    const usageIndexes = buildUsageEventIndexes(data, user.id);
 
     for (const [index, rawEvent] of batch.events.entries()) {
       const parsed = usageEventV1Schema.safeParse(rawEvent);
@@ -329,10 +464,7 @@ export class TokSyncRepository {
         continue;
       }
       const event = parsed.data;
-      if (
-        event.deviceId !== auth.device.id ||
-        batch.device.id !== auth.device.id
-      ) {
+      if (event.deviceId !== device.id || batch.device.id !== device.id) {
         errors.push({
           index,
           code: "wrong_device",
@@ -342,22 +474,18 @@ export class TokSyncRepository {
       }
 
       sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
-      const existingIndex = findExistingUsageEventIndex(
-        data,
-        auth.user.id,
-        event,
-      );
-      const existing =
-        existingIndex >= 0 ? data.usageEvents[existingIndex] : undefined;
+      const existing = findExistingUsageEvent(usageIndexes, user.id, event);
       if (!existing) {
-        data.usageEvents.push({
+        const stored = {
           ...event,
           id: randomUUID(),
-          userId: auth.user.id,
+          userId: user.id,
           syncRunId: syncRun.id,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        data.usageEvents.push(stored);
+        indexUsageEvent(usageIndexes, stored);
         inserted += 1;
       } else if (existing.deviceId !== event.deviceId) {
         skipped += 1;
@@ -368,10 +496,23 @@ export class TokSyncRepository {
           syncRunId: syncRun.id,
           updatedAt: now,
         });
-        removeDuplicateUsageEvents(data, auth.user.id, event, existing.id);
+        removeDuplicateUsageEvents(
+          data,
+          usageIndexes,
+          user.id,
+          event,
+          existing.id,
+        );
+        indexUsageEvent(usageIndexes, existing);
         updated += 1;
       } else {
-        removeDuplicateUsageEvents(data, auth.user.id, event, existing.id);
+        removeDuplicateUsageEvents(
+          data,
+          usageIndexes,
+          user.id,
+          event,
+          existing.id,
+        );
         skipped += 1;
       }
     }
@@ -388,21 +529,39 @@ export class TokSyncRepository {
     syncRun.skippedCount = skipped;
     syncRun.errorCount = errors.length;
     syncRun.finishedAt = now;
-    auth.device.lastSeenAt = now;
-    this.recomputeUserInData(data, auth.user.id);
+    device.lastSeenAt = now;
+    device.updatedAt = now;
+    this.recomputeUserInData(data, user.id);
+    const response: {
+      runId: string;
+      status: "accepted" | "rejected";
+      inserted: number;
+      updated: number;
+      skipped: number;
+      errors: Array<{ index: number; code: string; message: string }>;
+      rollupStatus: "completed";
+    } = {
+      runId: batch.runId,
+      status: syncRun.status === "failed" ? "rejected" : "accepted",
+      inserted,
+      updated,
+      skipped,
+      errors,
+      rollupStatus: "completed",
+    };
+    data.syncReceipts = data.syncReceipts.filter(
+      (receipt) => receipt.syncRunId !== syncRun.id,
+    );
+    data.syncReceipts.push(
+      buildSyncReceipt(user.id, device.id, batch, syncRun, response, now),
+    );
+    this.refreshSourceHealthInData(data, user.id, now);
+    this.refreshMergeIssuesInData(data, user.id, now);
     this.store.write(data);
 
     return {
       ok: true as const,
-      response: {
-        runId: batch.runId,
-        status: syncRun.status === "failed" ? "rejected" : "accepted",
-        inserted,
-        updated,
-        skipped,
-        errors,
-        rollupStatus: "completed",
-      },
+      response,
       status: 200,
     };
   }
@@ -476,12 +635,13 @@ export class TokSyncRepository {
     if (!user) return [];
     return data.devices
       .filter((device) => device.userId === user.id)
-      .map((device) => ({
-        ...device,
-        eventCount: data.usageEvents.filter(
-          (event) => event.deviceId === device.id,
-        ).length,
-      }));
+      .map((device) =>
+        deviceView(
+          device,
+          data.usageEvents.filter((event) => event.deviceId === device.id)
+            .length,
+        ),
+      );
   }
 
   listSyncRuns(username = "demo") {
@@ -490,7 +650,189 @@ export class TokSyncRepository {
     return this.store
       .read()
       .syncRuns.filter((run) => run.userId === user.id)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .map(syncRunView);
+  }
+
+  listSyncReceipts(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    return data.syncReceipts
+      .filter((receipt) => receipt.userId === user.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(syncReceiptView);
+  }
+
+  getSyncReceipt(username: string, receiptId: string) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    const receipt =
+      data.syncReceipts.find(
+        (receipt) => receipt.userId === user.id && receipt.id === receiptId,
+      ) ?? null;
+    return receipt ? syncReceiptView(receipt) : null;
+  }
+
+  sourceHealth(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    this.refreshSourceHealthInData(data, user.id, new Date().toISOString());
+    this.store.write(data);
+    return data.sourceHealthSnapshots
+      .filter((snapshot) => snapshot.userId === user.id)
+      .sort((a, b) => a.source.localeCompare(b.source))
+      .map(sourceHealthView);
+  }
+
+  mergeIssues(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    this.refreshMergeIssuesInData(data, user.id, new Date().toISOString());
+    this.store.write(data);
+    return data.mergeIssues
+      .filter((issue) => issue.userId === user.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(mergeIssueView);
+  }
+
+  resolveMergeIssue(
+    username: string,
+    issueId: string,
+    action: MergeIssueRecord["suggestedAction"],
+  ) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    const issue = user
+      ? data.mergeIssues.find(
+          (item) => item.userId === user.id && item.id === issueId,
+        )
+      : undefined;
+    if (!user || !issue) return null;
+    issue.status = action === "dismiss" ? "dismissed" : "resolved";
+    issue.resolvedAt = new Date().toISOString();
+    this.recomputeUserInData(data, user.id);
+    this.store.write(data);
+    return { status: issue.status, rollupStatus: "completed" };
+  }
+
+  exportMetrics(
+    username = "demo",
+    options: DashboardFilters & { format?: "json" | "csv" } = {},
+  ) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    const rows = this.filterEvents(data, user.id, options).map((event) =>
+      metricsExportRow(event),
+    );
+    if (options.format === "csv") {
+      return {
+        format: "csv" as const,
+        fileName: `toksync-metrics-${user.usernameLower}.csv`,
+        contentType: "text/csv; charset=utf-8",
+        rowCount: rows.length,
+        body: toCsv(rows),
+      };
+    }
+    return {
+      format: "json" as const,
+      fileName: `toksync-metrics-${user.usernameLower}.json`,
+      contentType: "application/json; charset=utf-8",
+      rowCount: rows.length,
+      body: JSON.stringify(
+        {
+          schemaVersion: 1,
+          exportedAt: new Date().toISOString(),
+          privacy: {
+            mode: "metrics-only",
+            excludedFields: RECEIPT_EXCLUDED_FIELDS,
+          },
+          rows,
+        },
+        null,
+        2,
+      ),
+    };
+  }
+
+  deleteSubmittedData(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    user.publicProfileEnabled = false;
+    user.showCost = false;
+    user.showSourceBreakdown = false;
+    user.showModelBreakdown = false;
+    user.updatedAt = new Date().toISOString();
+    data.publicProfileStats = data.publicProfileStats.filter(
+      (stats) => stats.userId !== user.id,
+    );
+    this.store.write(data);
+    return {
+      deleted: true,
+      publicProfileEnabled: false,
+      leaderboardOptIn: false,
+    };
+  }
+
+  previewLocalPayload(rawPayload: unknown) {
+    try {
+      assertMetricsOnlyPayload(rawPayload);
+    } catch (error) {
+      return {
+        ok: false as const,
+        response: apiError(
+          "privacy_violation",
+          error instanceof Error
+            ? error.message
+            : "Payload contains forbidden content fields",
+        ),
+        status: 400,
+      };
+    }
+    const envelope = usageBatchV1Schema.safeParse(rawPayload);
+    if (!envelope.success) {
+      return {
+        ok: false as const,
+        response: apiError(
+          "invalid_payload",
+          "Usage batch failed validation",
+          envelope.error.issues,
+        ),
+        status: 400,
+      };
+    }
+    const events = envelope.data.events
+      .map((event) => usageEventV1Schema.safeParse(event))
+      .filter((result) => result.success)
+      .map((result) => result.data);
+    const previewEvents = events.map((event) => ({
+      ...event,
+      id: "preview",
+      userId: "preview",
+      syncRunId: "preview",
+      createdAt: "preview",
+      updatedAt: "preview",
+    }));
+    const totals = sumEvents(previewEvents);
+    return {
+      ok: true as const,
+      response: {
+        eventCount: events.length,
+        totals: {
+          tokens: totals.tokens,
+          costUsd: round(totals.costUsd),
+          messages: totals.messages,
+        },
+        sourceSummary: countBy(events, "source"),
+        receipt: buildPreviewReceipt(envelope.data),
+      },
+      status: 200,
+    };
   }
 
   revokeDevice(username: string, deviceId: string) {
@@ -679,6 +1021,186 @@ export class TokSyncRepository {
     });
   }
 
+  private authenticateUsageWriter(
+    data: TokSyncData,
+    rawToken: string | undefined,
+    batch: UsageBatchEnvelope,
+  ): { user: UserRecord; device: DeviceRecord } | null {
+    if (!rawToken) return null;
+    const tokenHash = this.hashToken(rawToken);
+    if (rawToken.startsWith("tsd_")) {
+      const token = data.deviceTokens.find((item) =>
+        constantTimeEqual(item.tokenHash, tokenHash),
+      );
+      if (!token || token.revokedAt || !token.scopes.includes("usage:write")) {
+        return null;
+      }
+      const user = data.users.find((item) => item.id === token.userId);
+      const device = data.devices.find((item) => item.id === token.deviceId);
+      if (!user || !device || device.revokedAt) return null;
+      if (device.id !== batch.device.id) return null;
+      token.lastUsedAt = new Date().toISOString();
+      return { user, device };
+    }
+
+    if (rawToken.startsWith("tsu_")) {
+      const token = data.userApiTokens.find((item) =>
+        constantTimeEqual(item.tokenHash, tokenHash),
+      );
+      if (
+        !token ||
+        token.revokedAt ||
+        !token.scopes.includes("usage:write") ||
+        (token.expiresAt && Date.parse(token.expiresAt) < Date.now())
+      ) {
+        return null;
+      }
+      const user = data.users.find((item) => item.id === token.userId);
+      if (!user) return null;
+      const existingOwner = data.devices.find(
+        (item) => item.id === batch.device.id && item.userId !== user.id,
+      );
+      if (existingOwner) return null;
+      let device = data.devices.find(
+        (item) => item.id === batch.device.id && item.userId === user.id,
+      );
+      const now = new Date().toISOString();
+      if (!device) {
+        device = {
+          id: batch.device.id,
+          userId: user.id,
+          deviceFingerprintHash: this.hashDeviceFingerprint(
+            `user-api:${user.id}:${batch.device.id}`,
+          ),
+          name: batch.device.name,
+          platform: batch.device.platform,
+          agentVersion: batch.device.agentVersion,
+          lastSeenAt: now,
+          createdAt: now,
+          updatedAt: now,
+        };
+        data.devices.push(device);
+      }
+      token.lastUsedAt = now;
+      return { user, device };
+    }
+
+    return null;
+  }
+
+  private refreshSourceHealthInData(
+    data: TokSyncData,
+    userId: string,
+    now: string,
+  ) {
+    data.sourceHealthSnapshots = data.sourceHealthSnapshots.filter(
+      (snapshot) => snapshot.userId !== userId,
+    );
+    const userRuns = data.syncRuns.filter((run) => run.userId === userId);
+    const userEvents = data.usageEvents.filter(
+      (event) => event.userId === userId,
+    );
+    for (const source of SOURCE_REGISTRY) {
+      const sourceEvents = userEvents.filter(
+        (event) => event.source === source.id,
+      );
+      const sourceRuns = userRuns.filter((run) => run.sourceSummary[source.id]);
+      const lastRun = latest(
+        sourceRuns.map((run) => run.finishedAt || run.startedAt),
+      );
+      const lastEventMs = Math.max(
+        0,
+        ...sourceEvents.map((event) => event.timestampMs),
+      );
+      const stale =
+        lastRun && Date.now() - Date.parse(lastRun) > 7 * 24 * 60 * 60 * 1000;
+      const retentionRisk =
+        lastEventMs > 0 && Date.now() - lastEventMs > 21 * 24 * 60 * 60 * 1000;
+      const status: SourceHealthSnapshotRecord["status"] =
+        sourceEvents.length === 0
+          ? "missing"
+          : retentionRisk
+            ? "retention_risk"
+            : stale
+              ? "stale"
+              : "ok";
+      const snapshot: SourceHealthSnapshotRecord = {
+        id: randomUUID(),
+        userId,
+        source: source.id,
+        status,
+        details: {
+          displayName: source.displayName,
+          eventCount: sourceEvents.length,
+          retentionDays: null,
+        },
+        createdAt: now,
+      };
+      if (lastRun) snapshot.lastSuccessfulSyncAt = lastRun;
+      if (lastEventMs)
+        snapshot.lastEventAt = new Date(lastEventMs).toISOString();
+      const recommendedAction = sourceHealthAction(status, source.id);
+      if (recommendedAction) snapshot.recommendedAction = recommendedAction;
+      data.sourceHealthSnapshots.push(snapshot);
+    }
+  }
+
+  private refreshMergeIssuesInData(
+    data: TokSyncData,
+    userId: string,
+    now: string,
+  ) {
+    const skippedBySource = new Map<string, number>();
+    for (const run of data.syncRuns.filter((item) => item.userId === userId)) {
+      if (run.skippedCount <= 0) continue;
+      const sources = Object.keys(run.sourceSummary);
+      for (const source of sources.length ? sources : ["unknown"]) {
+        skippedBySource.set(
+          source,
+          (skippedBySource.get(source) ?? 0) + run.skippedCount,
+        );
+      }
+    }
+    for (const [source, skipped] of skippedBySource) {
+      const existing = data.mergeIssues.find(
+        (issue) =>
+          issue.userId === userId &&
+          issue.source === source &&
+          issue.type === "duplicate_history" &&
+          issue.status === "open",
+      );
+      const devices = [
+        ...new Set(
+          data.syncRuns
+            .filter(
+              (run) =>
+                run.userId === userId &&
+                run.skippedCount > 0 &&
+                (run.sourceSummary[source] || source === "unknown"),
+            )
+            .map((run) => run.deviceId),
+        ),
+      ];
+      if (existing) {
+        existing.affectedEvents = skipped;
+        existing.devices = devices;
+        continue;
+      }
+      data.mergeIssues.push({
+        id: randomUUID(),
+        userId,
+        type: "duplicate_history",
+        status: "open",
+        source,
+        devices,
+        affectedEvents: skipped,
+        affectedTokens: 0,
+        suggestedAction: "confirm_duplicate",
+        createdAt: now,
+      });
+    }
+  }
+
   private hashToken(rawToken: string) {
     return hashOpaqueValue(rawToken, this.secrets.tokenHashSecret);
   }
@@ -699,6 +1221,273 @@ export interface DashboardFilters {
   deviceId?: string;
   modelId?: string;
   workspace?: string;
+}
+
+const RECEIPT_UPLOADED_FIELDS = [
+  "schemaVersion",
+  "source",
+  "device identity",
+  "workspace label",
+  "agent",
+  "modelId",
+  "providerId",
+  "timestampMs",
+  "localDate",
+  "tokens",
+  "costUsd",
+  "messageCount",
+  "isTurnStart",
+];
+
+const RECEIPT_EXCLUDED_FIELDS = [
+  "conversation content",
+  "assistant replies",
+  "tool payloads",
+  "file contents",
+  "raw project paths",
+  "source message identifiers",
+  "workspace hashes",
+  "secrets",
+  "device names",
+];
+
+function buildSyncReceipt(
+  userId: string,
+  deviceId: string,
+  batch: UsageBatchEnvelope,
+  syncRun: SyncRunRecord,
+  response: {
+    status: "accepted" | "rejected";
+    inserted: number;
+    updated: number;
+    skipped: number;
+    errors: unknown[];
+  },
+  now: string,
+): SyncReceiptRecord {
+  return {
+    id: randomUUID(),
+    userId,
+    deviceId,
+    syncRunId: syncRun.id,
+    clientRunId: batch.runId,
+    mode: batch.mode,
+    status: response.status,
+    uploadedFields: RECEIPT_UPLOADED_FIELDS,
+    excludedFields: RECEIPT_EXCLUDED_FIELDS,
+    privacyChecks: [
+      { name: "metrics_only_payload", status: "pass" },
+      { name: "content_fields_excluded", status: "pass" },
+      { name: "raw_paths_excluded", status: "pass" },
+    ],
+    payloadDigest: `sha256:${sha256Base64Url(JSON.stringify(batch))}`,
+    sourceSummary: syncRun.sourceSummary,
+    resultSummary: {
+      inserted: response.inserted,
+      updated: response.updated,
+      skipped: response.skipped,
+      errors: response.errors.length,
+    },
+    createdAt: now,
+  };
+}
+
+function buildPreviewReceipt(batch: UsageBatchEnvelope) {
+  return {
+    mode: batch.mode,
+    uploadedFields: RECEIPT_UPLOADED_FIELDS,
+    excludedFields: RECEIPT_EXCLUDED_FIELDS,
+    privacyChecks: [
+      { name: "metrics_only_payload", status: "pass" },
+      { name: "content_fields_excluded", status: "pass" },
+      { name: "raw_paths_excluded", status: "pass" },
+    ],
+    payloadDigest: `sha256:${sha256Base64Url(JSON.stringify(batch))}`,
+    sourceSummary: countBy(
+      batch.events
+        .map((event) => usageEventV1Schema.safeParse(event))
+        .filter((result) => result.success)
+        .map((result) => result.data),
+      "source",
+    ),
+  };
+}
+
+function metricsExportRow(event: StoredUsageEvent) {
+  return {
+    schemaVersion: event.schemaVersion,
+    source: event.source,
+    localDate: event.localDate,
+    timestampMs: event.timestampMs,
+    modelId: event.modelId,
+    providerId: event.providerId ?? "",
+    inputTokens: event.tokens.input,
+    outputTokens: event.tokens.output,
+    cacheReadTokens: event.tokens.cacheRead,
+    cacheWriteTokens: event.tokens.cacheWrite,
+    reasoningTokens: event.tokens.reasoning,
+    totalTokens: totalTokens(event.tokens),
+    costUsd: event.costUsd ?? 0,
+    messageCount: event.messageCount,
+    isTurnStart: Boolean(event.isTurnStart),
+  };
+}
+
+function toCsv(rows: Array<ReturnType<typeof metricsExportRow>>) {
+  const headers = [
+    "schemaVersion",
+    "source",
+    "localDate",
+    "timestampMs",
+    "modelId",
+    "providerId",
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "totalTokens",
+    "costUsd",
+    "messageCount",
+    "isTurnStart",
+  ];
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers
+        .map((header) => csvCell(row[header as keyof typeof row]))
+        .join(","),
+    ),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function csvCell(value: string | number | boolean) {
+  const raw = String(value);
+  return /[",\n]/.test(raw) ? `"${raw.replaceAll('"', '""')}"` : raw;
+}
+
+function countBy<T extends Record<string, unknown>>(items: T[], key: keyof T) {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const value = String(item[key] ?? "unknown");
+    counts[value] = (counts[value] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function sourceHealthAction(
+  status: SourceHealthSnapshotRecord["status"],
+  source: string,
+) {
+  if (status === "missing")
+    return `Run toksync sources list and sync ${source}`;
+  if (status === "stale") return `Run toksync sync --source ${source}`;
+  if (status === "retention_risk")
+    return `Sync ${source} before local logs rotate`;
+  if (status === "permission_error")
+    return `Check local read permissions for ${source}`;
+  return undefined;
+}
+
+function pruneDeviceCodesInData(data: TokSyncData) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const before = data.deviceCodes.length;
+  data.deviceCodes = data.deviceCodes.filter((code) => {
+    const expiredLongAgo = Date.parse(code.expiresAt) < cutoff;
+    const consumedLongAgo = code.consumedAt
+      ? Date.parse(code.consumedAt) < cutoff
+      : false;
+    return !expiredLongAgo && !consumedLongAgo;
+  });
+  return data.deviceCodes.length !== before;
+}
+
+function userApiTokenMetadataView(token: UserApiTokenRecord) {
+  return {
+    id: token.id,
+    name: token.name,
+    scopes: token.scopes,
+    lastUsedAt: token.lastUsedAt,
+    expiresAt: token.expiresAt,
+    revokedAt: token.revokedAt,
+    createdAt: token.createdAt,
+  };
+}
+
+function deviceView(device: DeviceRecord, eventCount: number) {
+  return {
+    id: device.id,
+    name: device.name,
+    platform: device.platform,
+    agentVersion: device.agentVersion,
+    lastSeenAt: device.lastSeenAt,
+    revokedAt: device.revokedAt,
+    dataClearedAt: device.dataClearedAt,
+    createdAt: device.createdAt,
+    updatedAt: device.updatedAt,
+    eventCount,
+  };
+}
+
+function syncRunView(run: SyncRunRecord) {
+  return {
+    id: run.id,
+    clientRunId: run.clientRunId,
+    mode: run.mode,
+    status: run.status,
+    sourceSummary: run.sourceSummary,
+    insertedCount: run.insertedCount,
+    updatedCount: run.updatedCount,
+    skippedCount: run.skippedCount,
+    errorCount: run.errorCount,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+  };
+}
+
+function syncReceiptView(receipt: SyncReceiptRecord) {
+  return {
+    id: receipt.id,
+    runId: receipt.clientRunId,
+    mode: receipt.mode,
+    status: receipt.status,
+    uploadedFields: receipt.uploadedFields,
+    excludedFields: receipt.excludedFields,
+    privacyChecks: receipt.privacyChecks,
+    payloadDigest: receipt.payloadDigest,
+    sourceSummary: receipt.sourceSummary,
+    resultSummary: receipt.resultSummary,
+    createdAt: receipt.createdAt,
+  };
+}
+
+function sourceHealthView(snapshot: SourceHealthSnapshotRecord) {
+  return {
+    id: snapshot.id,
+    source: snapshot.source,
+    status: snapshot.status,
+    lastSuccessfulSyncAt: snapshot.lastSuccessfulSyncAt,
+    lastEventAt: snapshot.lastEventAt,
+    details: snapshot.details,
+    recommendedAction: snapshot.recommendedAction,
+    createdAt: snapshot.createdAt,
+  };
+}
+
+function mergeIssueView(issue: MergeIssueRecord) {
+  return {
+    id: issue.id,
+    type: issue.type,
+    status: issue.status,
+    source: issue.source,
+    devices: issue.devices,
+    affectedEvents: issue.affectedEvents,
+    affectedTokens: issue.affectedTokens,
+    suggestedAction: issue.suggestedAction,
+    createdAt: issue.createdAt,
+    resolvedAt: issue.resolvedAt,
+  };
 }
 
 function buildProfileStats(
@@ -800,59 +1589,107 @@ function storedEventFingerprint(event: UsageEventV1) {
   });
 }
 
-function findExistingUsageEventIndex(
-  data: TokSyncData,
+interface UsageEventIndexes {
+  byDedupKey: Map<string, StoredUsageEvent>;
+  byStableKey: Map<string, StoredUsageEvent[]>;
+}
+
+function buildUsageEventIndexes(data: TokSyncData, userId: string) {
+  const indexes: UsageEventIndexes = {
+    byDedupKey: new Map(),
+    byStableKey: new Map(),
+  };
+  for (const event of data.usageEvents) {
+    if (event.userId === userId) indexUsageEvent(indexes, event);
+  }
+  return indexes;
+}
+
+function indexUsageEvent(indexes: UsageEventIndexes, event: StoredUsageEvent) {
+  indexes.byDedupKey.set(
+    dedupIndexKey(event.userId, event.source, event.dedupKey),
+    event,
+  );
+  const stableKey = stableUsageIndexKey(event.userId, event);
+  indexes.byStableKey.set(stableKey, [
+    ...(indexes.byStableKey.get(stableKey) ?? []).filter(
+      (item) => item.id !== event.id,
+    ),
+    event,
+  ]);
+}
+
+function findExistingUsageEvent(
+  indexes: UsageEventIndexes,
   userId: string,
   event: UsageEventV1,
 ) {
-  const exactIndex = data.usageEvents.findIndex(
-    (item) =>
-      item.userId === userId &&
-      item.source === event.source &&
-      item.dedupKey === event.dedupKey,
+  const exact = indexes.byDedupKey.get(
+    dedupIndexKey(userId, event.source, event.dedupKey),
   );
-  if (exactIndex >= 0) return exactIndex;
-
-  return data.usageEvents.findIndex(
-    (item) => item.userId === userId && sameStableUsageIdentity(item, event),
-  );
+  if (exact) return exact;
+  return indexes.byStableKey.get(stableUsageIndexKey(userId, event))?.[0];
 }
 
 function removeDuplicateUsageEvents(
   data: TokSyncData,
+  indexes: UsageEventIndexes,
   userId: string,
   event: UsageEventV1,
   keepId: string,
 ) {
-  for (let index = data.usageEvents.length - 1; index >= 0; index -= 1) {
-    const item = data.usageEvents[index];
-    if (
-      item &&
-      item.id !== keepId &&
-      item.userId === userId &&
-      sameStableUsageIdentity(item, event)
-    ) {
-      data.usageEvents.splice(index, 1);
-    }
+  const stableKey = stableUsageIndexKey(userId, event);
+  const duplicates = indexes.byStableKey
+    .get(stableKey)
+    ?.filter((item) => item.id !== keepId);
+  if (!duplicates?.length) return;
+
+  const duplicateIds = new Set(duplicates.map((item) => item.id));
+  data.usageEvents = data.usageEvents.filter(
+    (item) => !duplicateIds.has(item.id),
+  );
+  for (const duplicate of duplicates) {
+    indexes.byDedupKey.delete(
+      dedupIndexKey(duplicate.userId, duplicate.source, duplicate.dedupKey),
+    );
   }
+  indexes.byStableKey.set(
+    stableKey,
+    (indexes.byStableKey.get(stableKey) ?? []).filter(
+      (item) => !duplicateIds.has(item.id),
+    ),
+  );
 }
 
-function sameStableUsageIdentity(left: StoredUsageEvent, right: UsageEventV1) {
-  return (
-    left.source === right.source &&
-    left.sourceSessionId === right.sourceSessionId &&
-    left.sourceMessageId === right.sourceMessageId &&
-    left.timestampMs === right.timestampMs
-  );
+function dedupIndexKey(userId: string, source: string, dedupKey: string) {
+  return `${userId}\0${source}\0${dedupKey}`;
+}
+
+function stableUsageIndexKey(
+  userId: string,
+  event: Pick<
+    UsageEventV1,
+    "source" | "sourceSessionId" | "sourceMessageId" | "timestampMs"
+  >,
+) {
+  return [
+    userId,
+    event.source,
+    event.sourceSessionId,
+    event.sourceMessageId ?? "",
+    event.timestampMs,
+  ].join("\0");
 }
 
 function constantTimeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer)
-  );
+  const leftLength = Buffer.byteLength(left);
+  const rightLength = Buffer.byteLength(right);
+  const width = Math.max(leftLength, rightLength, 1);
+  const leftBuffer = Buffer.alloc(width);
+  const rightBuffer = Buffer.alloc(width);
+  leftBuffer.write(left);
+  rightBuffer.write(right);
+  return timingSafeEqual(leftBuffer, rightBuffer) && leftLength === rightLength;
 }
 
 function latest(values: Array<string | undefined>) {

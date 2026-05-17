@@ -43,6 +43,17 @@ describe("embed renderer", () => {
     expect(rank).toContain("#2563eb");
   });
 
+  it("uses unique paint server ids for multiple inline badges", () => {
+    const first = renderBadgeSvg(stats);
+    const second = renderBadgeSvg(stats);
+
+    const firstClip = /clipPath id="([^"]+)"/.exec(first)?.[1];
+    const secondClip = /clipPath id="([^"]+)"/.exec(second)?.[1];
+    expect(firstClip).toBeTruthy();
+    expect(secondClip).toBeTruthy();
+    expect(firstClip).not.toBe(secondClip);
+  });
+
   it("renders private/no-data badges and cards safely", () => {
     const badge = renderBadgeSvg(null, { metric: "tokens" });
     const card = renderProfileCardSvg(null);

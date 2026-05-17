@@ -1,10 +1,10 @@
 import { formatCompactNumber, formatUsd } from "@toksync/shared";
-import { apiGet } from "../../../lib/api";
+import { apiGet, type DashboardBreakdowns } from "../../../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function ModelsPage() {
-  const data = await apiGet<any>("/v1/dashboard/breakdowns");
+  const data = await apiGet<DashboardBreakdowns>("/v1/dashboard/breakdowns");
   const rows = data?.models ?? [];
   return (
     <div className="grid">
@@ -25,7 +25,7 @@ export default async function ModelsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row: any) => (
+            {rows.map((row) => (
               <tr key={row.key}>
                 <td>{row.key}</td>
                 <td>{formatCompactNumber(row.tokens)}</td>
