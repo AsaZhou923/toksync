@@ -78,7 +78,85 @@ export interface PublicProfileState {
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  leaderboardOptIn?: boolean;
   url?: string;
+}
+
+export type CostGuardrailScope = "global" | "source" | "model" | "device";
+export type CostGuardrailPeriod = "daily" | "weekly" | "monthly";
+
+export interface CostGuardrailRule {
+  id: string;
+  scope: CostGuardrailScope | string;
+  period: CostGuardrailPeriod | string;
+  limitUsd: number;
+  enabled: boolean;
+  source?: string;
+  modelId?: string;
+  deviceId?: string;
+  updatedAt?: string;
+}
+
+export interface CostGuardrailAnomaly {
+  id: string;
+  type: string;
+  severity: "info" | "warning" | "critical" | string;
+  source?: string;
+  modelId?: string;
+  deviceId?: string;
+  deltaUsd?: number;
+  explanation?: string;
+  createdAt?: string;
+}
+
+export interface CostGuardrailsResponse {
+  rules: CostGuardrailRule[];
+  anomalies: CostGuardrailAnomaly[];
+}
+
+export interface CostGuardrailUpsertInput {
+  scope: CostGuardrailScope;
+  period: CostGuardrailPeriod;
+  limitUsd: number;
+  enabled: boolean;
+  source?: string;
+  modelId?: string;
+  deviceId?: string;
+}
+
+export type LeaderboardMetric =
+  | "tokens"
+  | "active_days"
+  | "monthly_tokens"
+  | "streak";
+export type LeaderboardPeriod = "all_time" | "monthly" | "weekly";
+
+export interface LeaderboardRow {
+  rank?: number;
+  username?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  totalTokens?: number;
+  tokens?: number;
+  activeDays?: number;
+  monthlyTokens?: number;
+  streak?: number;
+  metricValue?: number;
+  totalCostUsd?: number;
+  value?: number;
+  [key: string]: unknown;
+}
+
+export interface LeaderboardResponse {
+  rows: LeaderboardRow[];
+  metric: LeaderboardMetric;
+  period: LeaderboardPeriod;
+  nextCursor?: string;
+}
+
+export interface LeaderboardOptInResponse {
+  enabled: boolean;
+  nextSnapshotAt?: string;
 }
 
 export interface PublicProfileStats {

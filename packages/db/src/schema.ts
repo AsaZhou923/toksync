@@ -294,3 +294,64 @@ export const publicProfileStats = pgTable("public_profile_stats", {
     .notNull()
     .defaultNow(),
 });
+
+export const costGuardrailRules = pgTable(
+  "cost_guardrail_rules",
+  {
+    id: uuid("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    source: text("source"),
+    modelId: text("model_id"),
+    deviceId: uuid("device_id").references(() => devices.id, {
+      onDelete: "cascade",
+    }),
+    period: text("period").notNull(),
+    limitUsd: numeric("limit_usd", { precision: 14, scale: 6 }).notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("cost_guardrail_rules_user_idx").on(table.userId),
+    index("cost_guardrail_rules_user_scope_idx").on(table.userId, table.scope),
+  ],
+);
+
+export const costAnomalies = pgTable(
+  "cost_anomalies",
+  {
+    id: text("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    ruleId: uuid("rule_id").references(() => costGuardrailRules.id, {
+      onDelete: "set null",
+    }),
+    type: text("type").notNull(),
+    severity: text("severity").notNull(),
+    source: text("source"),
+    modelId: text("model_id"),
+    deviceId: uuid("device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
+    periodStart: date("period_start"),
+    periodEnd: date("period_end"),
+    deltaUsd: numeric("delta_usd", { precision: 14, scale: 6 }),
+    explanation: text("explanation").notNull(),
+    status: text("status").notNull().default("open"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("cost_anomalies_user_idx").on(table.userId),
+    index("cost_anomalies_user_type_idx").on(table.userId, table.type),
+  ],
+);

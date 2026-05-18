@@ -2,6 +2,99 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-18-v0-3-cost-guardrails-leaderboard"></a>
+
+## 2026-05-18 - v0.3 cost guardrails leaderboard
+
+日期：2026-05-18
+
+本次更新完成 TokSync v0.3 第一版：把私有 Cost Guardrails 和 opt-in Leaderboard 纳入当前实现，同时修复全量验证与代码评审发现的成本守卫边界问题，并把仓库文档和外部 specs 收敛到“v0.3 只包含成本治理和公开榜单第一版”的真实范围。
+
+## 概览
+
+- 新增私有 Cost Guardrails API、repository 语义、schema 草案和 Web 控制台入口，支持 global/source/model/device 预算规则、budget exceeded、cost spike 和 unknown pricing 异常。
+- 新增 `/app/guardrails` 与 `/app/budgets` 成本治理页面，并在 dashboard 中展示私有成本守卫概览。
+- 新增 opt-in Leaderboard API 与 `/app/leaderboard` 页面，要求先开启 public profile，再单独加入榜单，并且只读取 `public_profile_stats` 公开聚合 cache。
+- 修复代码评审发现的 scoped cost guardrail 日期窗口、anomaly 时间戳稳定性和 device target 归属校验问题。
+- 移除当前 v0.3 migration/schema 中未使用的 leaderboard snapshot 表，把 snapshot worker、Private Usage Vault、Source 扩展机制继续保留为后续阶段。
+
+## 用户可见变化
+
+- Dashboard 导航新增 Guardrails 和 Leaderboard 入口；Guardrails 标记为 v0.3，Leaderboard 标记为 opt-in。
+- Guardrails 页面可以配置所有私有用量、source、model 或 device 维度的预算阈值，并查看私有异常摘要。
+- Budgets 页面作为成本治理入口复用 Guardrails 控制台，避免出现空页面或未接线入口。
+- Leaderboard 页面提供 participation gate、公开边界说明、metric/period 切换和当前公开聚合榜单预览。
+
+## API / Storage
+
+- `GET /v1/cost-guardrails` 和 `POST /v1/cost-guardrails` 需要私有 user session；预算规则和 anomalies 不进入 public profile、README SVG 或 leaderboard 输出。
+- `POST /v1/leaderboard/opt-in` 会在 public profile 未开启时拒绝加入榜单；`GET /v1/leaderboard` 只返回已公开且已 opt-in 的用户。
+- Cost Guardrails 的 source/model/device 规则按自身 scope 的最新事件日期计算窗口，不会被其他 source 或 device 的新事件推走。
+- Cost anomaly 以稳定 id upsert，并保留首次 `createdAt` 和 `status`，避免读接口刷新时破坏审计语义。
+- Device-scoped guardrail 现在要求 UUID，并校验 target device 属于当前用户；非法 target 不会写入 file store 或未来 SQL 外键不接受的状态。
+
+## Web / Embed
+
+- 新增 `CostGuardrailsConsole`、`CostGuardrailsPanel` 和 `LeaderboardConsole` 组件。
+- Web API helper 增加 Cost Guardrails、Leaderboard 和 public profile opt-in 类型。
+- UI 文案统一为“连接的 API 未暴露 v0.3 合同”类降级提示，避免把当前已实现能力描述成未上线。
+
+## Privacy / Public Data
+
+- Cost Guardrails 保持私有 dashboard 能力，不读取公开缓存，也不把预算、device、workspace、source session 或 message 级信息写入公开输出。
+- Leaderboard 只读公开聚合 cache；API 测试断言不会泄露 device id、workspace label/hash、source session id 或 source message id。
+- Private Usage Vault、Public Proof Pack、content sync、billing、source/model 分榜和 cursor 分页仍为后续能力，不在 v0.3 当前实现中打开。
+
+## 文档同步
+
+- `README.md`、`README.zh-CN.md` 和 `AGENTS.md` 更新为 v0.3 当前能力与边界。
+- 外部 specs 同步更新 overview、prd、architecture、api-design、database-design、sitemap 和 testing，明确 Vault、snapshot worker、Source 扩展机制仍在后续阶段。
+- Changelog workflow 的外部 Update Logs 镜像已按统一 `CHANGELOG.md` / `CHANGELOG_WORKFLOW.md` 结构同步。
+
+## 影响文件
+
+### Apps
+
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/web/app/app/page.tsx`
+- `apps/web/app/app/budgets/page.tsx`
+- `apps/web/app/app/guardrails/page.tsx`
+- `apps/web/app/app/leaderboard/page.tsx`
+- `apps/web/app/layout.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/components/CostGuardrailsConsole.tsx`
+- `apps/web/components/CostGuardrailsPanel.tsx`
+- `apps/web/components/LeaderboardConsole.tsx`
+- `apps/web/lib/api.ts`
+
+### Packages
+
+- `packages/shared/src/schemas.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/db/src/schema.ts`
+- `packages/db/src/store.ts`
+- `packages/db/src/types.ts`
+- `packages/db/migrations/0001_v0_1_metrics.sql`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `AGENTS.md`
+- `docs/changelog/CHANGELOG.md`
+- 外部 TokSync specs 中的 v0.3 范围、API、数据库、站点地图和测试策略说明
+
+## 验证
+
+- 已通过：`pnpm exec vitest run packages/db/src/repository.test.ts apps/api/src/app.test.ts`
+- 已通过：`pnpm typecheck`
+- 已通过：`pnpm exec prettier --check README.md README.zh-CN.md AGENTS.md "E:/Project Code/docs/01 - Projects/TokSync/00 - Specs/*.md"`
+- 已通过：`pnpm test:full`
+- 已通过：浏览器 spot check，`/app/guardrails`、`/app/budgets`、`/app/leaderboard` 实际渲染正常且 console 无 error。
+- 已通过：外部 Update Logs 镜像 `Get-FileHash`，仓库内 `CHANGELOG.md` / `CHANGELOG_WORKFLOW.md` 与外部副本哈希一致。
+
 <a id="2026-05-17-private-governance-sync-proof"></a>
 
 ## 2026-05-17 - private governance sync proof

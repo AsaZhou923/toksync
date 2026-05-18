@@ -6,11 +6,17 @@ import {
   type BadgeOptions,
   type PublicEmbedStats,
 } from "@toksync/embed-renderer";
-import { TokSyncRepository, type DashboardFilters } from "@toksync/db";
+import {
+  CostGuardrailTargetError,
+  TokSyncRepository,
+  type DashboardFilters,
+} from "@toksync/db";
 import {
   apiError,
+  costGuardrailInputSchema,
   deviceStartInputSchema,
   isValidUsername,
+  leaderboardOptInInputSchema,
   localPreviewInputSchema,
   mergeIssueResolutionInputSchema,
   normalizeUsername,
@@ -188,6 +194,41 @@ export function createApiApp(options: ApiAppOptions = {}) {
     return c.json({ sources: repo.sourceHealth(username) });
   });
 
+  app.get("/v1/cost-guardrails", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const guardrails = repo.listCostGuardrails(username);
+    if (!guardrails)
+      return c.json(apiError("not_found", "User not found"), 404);
+    return c.json(guardrails);
+  });
+
+  app.post("/v1/cost-guardrails", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = costGuardrailInputSchema.safeParse(body);
+    if (!parsed.success)
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid cost guardrail payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    try {
+      return c.json(repo.upsertCostGuardrail(username, parsed.data));
+    } catch (error) {
+      if (error instanceof CostGuardrailTargetError) {
+        return c.json(apiError("not_found", error.message), 404);
+      }
+      throw error;
+    }
+  });
+
   app.get("/v1/merge/issues", (c) => {
     const username = userFromRequest(c.req.raw, devAuth);
     if (!username)
@@ -338,12 +379,43 @@ export function createApiApp(options: ApiAppOptions = {}) {
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const user = repo.getUser(username) ?? repo.seedDevelopmentUser(username);
+    const publicStats = repo.getPublicStats(user.username);
     return c.json({
       enabled: user.publicProfileEnabled,
       showCost: user.showCost,
       showSourceBreakdown: user.showSourceBreakdown,
       showModelBreakdown: user.showModelBreakdown,
+      leaderboardOptIn: publicStats?.leaderboardOptIn ?? false,
       url: `${process.env.APP_URL || "http://localhost:3000"}/u/${user.username}`,
+    });
+  });
+
+  app.post("/v1/leaderboard/opt-in", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = leaderboardOptInInputSchema.safeParse(body);
+    if (!parsed.success)
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid leaderboard opt-in payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    const result = repo.setLeaderboardOptIn(username, parsed.data);
+    if (!result) return c.json(apiError("not_found", "User not found"), 404);
+    if (!result.ok) {
+      return c.json(
+        apiError("invalid_payload", result.message, { code: result.code }),
+        409,
+      );
+    }
+    return c.json({
+      enabled: result.enabled,
+      nextSnapshotAt: result.nextSnapshotAt,
     });
   });
 
@@ -391,15 +463,16 @@ export function createApiApp(options: ApiAppOptions = {}) {
     return svgResponse(svg, isValidUsername(username) ? 200 : 400);
   });
 
-  app.get("/v1/leaderboard", (c) =>
-    c.json(
-      apiError(
-        "feature_not_enabled",
-        "Leaderboard is planned after v0.1 and requires opt-in",
-      ),
-      501,
-    ),
-  );
+  app.get("/v1/leaderboard", (c) => {
+    const limit = parsePositiveInt(c.req.query("limit"));
+    return c.json(
+      repo.listLeaderboard({
+        metric: parseLeaderboardMetric(c.req.query("metric")),
+        period: parseLeaderboardPeriod(c.req.query("period")),
+        ...(limit ? { limit } : {}),
+      }),
+    );
+  });
 
   return app;
 }
@@ -467,6 +540,27 @@ function publicStatsToEmbed(
 function parseMetric(value: string | undefined): "tokens" | "cost" | "rank" {
   if (value === "cost" || value === "rank") return value;
   return "tokens";
+}
+
+function parseLeaderboardMetric(value: string | undefined) {
+  if (
+    value === "active_days" ||
+    value === "streak" ||
+    value === "monthly_tokens"
+  ) {
+    return value;
+  }
+  return "tokens" as const;
+}
+
+function parseLeaderboardPeriod(value: string | undefined) {
+  if (value === "weekly" || value === "monthly") return value;
+  return "all_time" as const;
+}
+
+function parsePositiveInt(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function truthy(value: string | undefined) {

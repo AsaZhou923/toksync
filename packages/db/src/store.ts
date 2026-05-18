@@ -161,5 +161,7 @@ function hydrateTokSyncData(data: TokSyncData): TokSyncData {
     usageDaily: data.usageDaily ?? empty.usageDaily,
     profileStats: data.profileStats ?? empty.profileStats,
     publicProfileStats: data.publicProfileStats ?? empty.publicProfileStats,
+    costGuardrailRules: data.costGuardrailRules ?? empty.costGuardrailRules,
+    costAnomalies: data.costAnomalies ?? empty.costAnomalies,
   };
 }

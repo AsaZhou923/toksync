@@ -14,7 +14,9 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import {
+  ApiRequestError,
   apiGet,
+  type CostGuardrailsResponse,
   type DashboardSummary,
   type PublicProfileState,
   type SyncRunsResponse,
@@ -27,6 +29,7 @@ import {
   buildSourceHealthRows,
 } from "../../lib/v02";
 import { BreakdownPanel } from "../../components/BreakdownPanel";
+import { CostGuardrailsPanel } from "../../components/CostGuardrailsPanel";
 import { MergeCopilotPanel } from "../../components/MergeCopilotPanel";
 import { MetricCard } from "../../components/MetricCard";
 import { PrivacyReceiptPanel } from "../../components/PrivacyReceiptPanel";
@@ -35,12 +38,14 @@ import { SourceHealthRadar } from "../../components/SourceHealthRadar";
 export const dynamic = "force-dynamic";
 
 export default async function AppDashboardPage() {
-  const [summary, daily, syncRuns, publicProfile] = await Promise.all([
-    apiGet<DashboardSummary>("/v1/dashboard/summary"),
-    apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
-    apiGet<SyncRunsResponse>("/v1/sync-runs"),
-    apiGet<PublicProfileState>("/v1/public-profile"),
-  ]);
+  const [summary, daily, syncRuns, publicProfile, guardrailsResult] =
+    await Promise.all([
+      apiGet<DashboardSummary>("/v1/dashboard/summary"),
+      apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
+      apiGet<SyncRunsResponse>("/v1/sync-runs"),
+      apiGet<PublicProfileState>("/v1/public-profile"),
+      loadGuardrailsOverview(),
+    ]);
   const totals = summary?.totals ?? {
     tokens: 0,
     costUsd: 0,
@@ -114,8 +119,8 @@ export default async function AppDashboardPage() {
           <h1>AI coding usage</h1>
           <p className="lede">
             Scan multi-device AI coding usage, replay safety, source coverage,
-            private governance, and public sharing state from the v0.2 web
-            surface.
+            cost guardrails, and public sharing state from the operational web
+            console.
           </p>
           <span className="time-scope">{rangeLabel}</span>
         </div>
@@ -123,6 +128,10 @@ export default async function AppDashboardPage() {
           <a className="btn" href="/app/merge">
             <ShieldCheck size={16} />
             Merge Copilot
+          </a>
+          <a className="btn" href="/app/budgets">
+            <ShieldCheck size={16} />
+            Guardrails
           </a>
           <a className="btn primary" href="/app/sync-runs">
             <RotateCw size={16} />
@@ -241,7 +250,7 @@ export default async function AppDashboardPage() {
           </a>
         </div>
       </section>
-      <section className="grid grid-3">
+      <section className="grid grid-2">
         <div className="card">
           <h2 className="section-title">Source coverage</h2>
           <div className="source-grid">
@@ -265,7 +274,6 @@ export default async function AppDashboardPage() {
             ))}
           </div>
         </div>
-        <MergeCopilotPanel items={mergeCopilot} href="/app/merge" />
         <div className="card">
           <h2 className="section-title">Public surface</h2>
           <div className="public-proof-card">
@@ -293,6 +301,13 @@ export default async function AppDashboardPage() {
             </div>
           </div>
         </div>
+      </section>
+      <section className="grid grid-2">
+        <MergeCopilotPanel items={mergeCopilot} href="/app/merge" />
+        <CostGuardrailsPanel
+          available={guardrailsResult.available}
+          data={guardrailsResult.data}
+        />
       </section>
       <section className="grid grid-2">
         <PrivacyReceiptPanel receipt={receipt} />
@@ -331,4 +346,24 @@ export default async function AppDashboardPage() {
       </section>
     </div>
   );
+}
+
+async function loadGuardrailsOverview(): Promise<{
+  data: CostGuardrailsResponse | null;
+  available: boolean;
+}> {
+  try {
+    const data = await apiGet<CostGuardrailsResponse>("/v1/cost-guardrails", {
+      notFoundAsNull: false,
+    });
+    return { data, available: true };
+  } catch (error) {
+    if (
+      error instanceof ApiRequestError &&
+      (error.status === 404 || error.status === 501)
+    ) {
+      return { data: null, available: false };
+    }
+    throw error;
+  }
 }

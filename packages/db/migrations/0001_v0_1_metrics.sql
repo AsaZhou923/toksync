@@ -174,3 +174,40 @@ create table if not exists public_profile_stats (
   leaderboard_opt_in boolean not null default false,
   updated_at timestamptz not null default now()
 );
+
+create table if not exists cost_guardrail_rules (
+  id uuid primary key,
+  user_id uuid not null references users(id) on delete cascade,
+  scope text not null,
+  source text,
+  model_id text,
+  device_id uuid references devices(id) on delete cascade,
+  period text not null,
+  limit_usd numeric(14, 6) not null,
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists cost_guardrail_rules_user_idx on cost_guardrail_rules(user_id);
+create index if not exists cost_guardrail_rules_user_scope_idx on cost_guardrail_rules(user_id, scope);
+
+create table if not exists cost_anomalies (
+  id text primary key,
+  user_id uuid not null references users(id) on delete cascade,
+  rule_id uuid references cost_guardrail_rules(id) on delete set null,
+  type text not null,
+  severity text not null,
+  source text,
+  model_id text,
+  device_id uuid references devices(id) on delete set null,
+  period_start date,
+  period_end date,
+  delta_usd numeric(14, 6),
+  explanation text not null,
+  status text not null default 'open',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists cost_anomalies_user_idx on cost_anomalies(user_id);
+create index if not exists cost_anomalies_user_type_idx on cost_anomalies(user_id, type);

@@ -34,8 +34,8 @@ The v0.1 loop is:
 - Metrics-only is the default and the MVP. Do not add content sync UI or active content upload without an explicit product decision.
 - Never include prompt text, assistant response text, tool arguments, tool output, file content, secrets, raw absolute project paths, source session details, or message text in public output.
 - Public profile is opt-in. README badge/profile-card data must come only from public aggregate state, not private raw events.
-- Leaderboard is not v0.1. If touched, it must remain opt-in and use public aggregate snapshots only.
-- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, Private Usage Vault, and Public Proof Pack are planned differentiators, not current v0.1 implementation. If touched early, present them as planned or disabled surfaces unless the product scope is explicitly changed.
+- Leaderboard is not v0.1. If touched, it must remain opt-in and read only public aggregate state; later snapshots may be derived from that public state.
+- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, and the opt-in leaderboard are current v0.2/v0.3 implementation surfaces. Private Usage Vault and Public Proof Pack remain planned differentiators unless the product scope is explicitly changed.
 - Billing, subscription plans, payment providers, paid limits, and billing UI are out of scope for v0.1.
 - Cost estimates are approximate; do not present them as provider billing truth.
 - Device fingerprinting must not use hostname, MAC address, OS machine id, username, home path, or project path. It should derive from a local random seed and server-side pepper.
@@ -46,8 +46,8 @@ The v0.1 loop is:
 - Runtime stack: TypeScript, Node 22-style ESM, Turbo, Vitest, Playwright.
 - Apps:
   - `apps/agent`: Commander CLI with `login`, `logout`, `status`, `sources list`, and `sync`.
-  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, public profile, badge, and embed routes.
-  - `apps/web`: Next.js app for landing, dashboard, docs, device auth, public profile, and embed settings.
+  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, badge, embed, and opt-in leaderboard routes.
+  - `apps/web`: Next.js app for landing, dashboard, docs, device auth, source health, receipts, merge, cost guardrails, leaderboard settings, public profile, and embed settings.
   - `apps/worker`: lightweight worker/health surface; rollup work is currently synchronous in the repository layer.
 - Packages:
   - `packages/shared`: Zod schemas, source registry, formatting, and shared errors.
@@ -104,7 +104,7 @@ Keep these stable unless the change is intentional and documented:
 Required private/public separation:
 
 - Private dashboard may read user-owned events and aggregates.
-- Public profile, badge, and embed must read public aggregate state only.
+- Public profile, badge, embed, and leaderboard must read public aggregate state only.
 - Public output must not expose device name, raw project path, workspace hash, source session id, message id, message text, tool arguments, or tool output.
 - `public_profile_enabled` defaults to false.
 - Cost display is controlled by `showCost`.
@@ -213,14 +213,28 @@ Current important routes include:
 - `GET /v1/dashboard/usage-daily`
 - `GET /v1/dashboard/breakdowns`
 - `GET /v1/sync-runs`
+- `GET /v1/sync/receipts`
+- `GET /v1/sync/receipts/:id`
+- `GET /v1/source-health`
+- `GET /v1/cost-guardrails`
+- `POST /v1/cost-guardrails`
+- `GET /v1/merge/issues`
+- `POST /v1/merge/issues/:id/resolve`
+- `GET /v1/exports`
+- `POST /v1/local/preview`
 - `GET /v1/devices`
 - `DELETE /v1/devices/:id/data`
 - `POST /v1/devices/:id/revoke`
+- `GET /v1/settings/tokens`
+- `POST /v1/settings/tokens`
+- `DELETE /v1/settings/tokens/:id`
+- `DELETE /v1/settings/submitted-data`
 - `GET|POST /v1/public-profile`
 - `GET /v1/public-profile/:username`
+- `POST /v1/leaderboard/opt-in`
 - `GET /v1/badge/:username`
 - `GET /v1/embed/:username`
-- `GET /v1/leaderboard` currently returns feature-disabled
+- `GET /v1/leaderboard`
 
 SVG responses must keep:
 

@@ -1,11 +1,15 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   apiError,
+  costGuardrailInputSchema,
   isValidUsername,
+  leaderboardOptInInputSchema,
   normalizeUsername,
   SOURCE_REGISTRY,
   publicProfileInputSchema,
   totalTokens,
+  type CostGuardrailInput,
+  type LeaderboardOptInInput,
   userApiTokenInputSchema,
   usageBatchV1Schema,
   usageEventV1Schema,
@@ -24,6 +28,8 @@ import {
 import { FileTokSyncStore } from "./store";
 import type {
   BreakdownRow,
+  CostAnomalyRecord,
+  CostGuardrailRuleRecord,
   DeviceRecord,
   DeviceTokenRecord,
   MergeIssueRecord,
@@ -54,6 +60,13 @@ export interface AuthContext {
 export interface UserApiTokenAuthContext {
   user: UserRecord;
   token: UserApiTokenRecord;
+}
+
+export class CostGuardrailTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CostGuardrailTargetError";
+  }
 }
 
 const DEV_SECRET = "dev-secret-change-me";
@@ -687,6 +700,79 @@ export class TokSyncRepository {
       .map(sourceHealthView);
   }
 
+  listCostGuardrails(username = "demo") {
+    const ensuredUser =
+      this.getUser(username) ?? this.seedDevelopmentUser(username);
+    const data = this.store.read();
+    const user = data.users.find((item) => item.id === ensuredUser.id);
+    if (!user) throw new Error("User disappeared during cost guardrail read");
+    this.refreshCostAnomaliesInData(data, user.id, new Date().toISOString());
+    this.store.write(data);
+    return {
+      rules: data.costGuardrailRules
+        .filter((rule) => rule.userId === user.id)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map(costGuardrailRuleView),
+      anomalies: data.costAnomalies
+        .filter((anomaly) => anomaly.userId === user.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map(costAnomalyView),
+    };
+  }
+
+  upsertCostGuardrail(username: string, rawInput: CostGuardrailInput) {
+    const input = costGuardrailInputSchema.parse(rawInput);
+    const ensuredUser =
+      this.getUser(username) ?? this.seedDevelopmentUser(username);
+    const data = this.store.read();
+    const user = data.users.find((item) => item.id === ensuredUser.id);
+    if (!user) throw new Error("User disappeared during cost guardrail update");
+    if (
+      input.scope === "device" &&
+      !data.devices.some(
+        (device) => device.userId === user.id && device.id === input.deviceId,
+      )
+    ) {
+      throw new CostGuardrailTargetError(
+        "Guardrail device target was not found for this user",
+      );
+    }
+
+    const now = new Date().toISOString();
+    const patch = normalizeCostGuardrailInput(input);
+    const existing =
+      data.costGuardrailRules.find(
+        (rule) => rule.userId === user.id && rule.id === input.id,
+      ) ??
+      data.costGuardrailRules.find((rule) =>
+        sameCostGuardrailTarget(rule, user.id, input),
+      );
+
+    const rule: CostGuardrailRuleRecord = existing ?? {
+      id: input.id ?? randomUUID(),
+      userId: user.id,
+      scope: patch.scope,
+      period: patch.period,
+      limitUsd: patch.limitUsd,
+      enabled: patch.enabled,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    Object.assign(rule, patch, { updatedAt: now });
+    if (!existing) data.costGuardrailRules.push(rule);
+
+    this.refreshCostAnomaliesInData(data, user.id, now);
+    this.store.write(data);
+    return {
+      rule: costGuardrailRuleView(rule),
+      anomalies: data.costAnomalies
+        .filter((anomaly) => anomaly.userId === user.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map(costAnomalyView),
+    };
+  }
+
   mergeIssues(username = "demo") {
     const data = this.store.read();
     const user = this.userByName(data, username);
@@ -905,6 +991,87 @@ export class TokSyncRepository {
     );
   }
 
+  setLeaderboardOptIn(username: string, rawInput: LeaderboardOptInInput) {
+    const input = leaderboardOptInInputSchema.parse(rawInput);
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    const now = new Date().toISOString();
+
+    if (!user.publicProfileEnabled) {
+      data.publicProfileStats = data.publicProfileStats.filter(
+        (stats) => stats.userId !== user.id,
+      );
+      this.store.write(data);
+      if (input.enabled) {
+        return {
+          ok: false as const,
+          code: "public_profile_required",
+          message: "Enable public profile before joining the leaderboard",
+        };
+      }
+      return {
+        ok: true as const,
+        enabled: false,
+        nextSnapshotAt: nextLeaderboardSnapshotAt(now),
+      };
+    }
+
+    let publicStats = data.publicProfileStats.find(
+      (stats) => stats.userId === user.id,
+    );
+    if (!publicStats) {
+      this.recomputeUserInData(data, user.id);
+      publicStats = data.publicProfileStats.find(
+        (stats) => stats.userId === user.id,
+      );
+    }
+    if (!publicStats) {
+      return {
+        ok: false as const,
+        code: "public_profile_required",
+        message: "Enable public profile before joining the leaderboard",
+      };
+    }
+
+    publicStats.leaderboardOptIn = input.enabled;
+    publicStats.updatedAt = now;
+    this.store.write(data);
+    return {
+      ok: true as const,
+      enabled: publicStats.leaderboardOptIn,
+      nextSnapshotAt: nextLeaderboardSnapshotAt(now),
+    };
+  }
+
+  listLeaderboard(query: LeaderboardQuery = {}) {
+    const data = this.store.read();
+    const metric = query.metric ?? "tokens";
+    const period = query.period ?? "all_time";
+    const limit = Math.max(1, Math.min(query.limit ?? 20, 100));
+    const generatedAt = new Date().toISOString();
+
+    const rows = data.publicProfileStats
+      .filter((stats) => stats.leaderboardOptIn)
+      .map((stats) => leaderboardEntryFromPublicStats(stats, metric, period))
+      .filter((row) => row.metricValue > 0)
+      .sort(
+        (left, right) =>
+          right.metricValue - left.metricValue ||
+          right.totalTokens - left.totalTokens ||
+          left.username.localeCompare(right.username),
+      )
+      .slice(0, limit)
+      .map((row, index) => ({ rank: index + 1, ...row }));
+
+    return {
+      metric,
+      period,
+      generatedAt,
+      rows,
+    };
+  }
+
   private recomputeUser(userId: string) {
     const data = this.store.read();
     this.recomputeUserInData(data, userId);
@@ -915,6 +1082,9 @@ export class TokSyncRepository {
     data.usageDaily = data.usageDaily.filter((row) => row.userId !== userId);
     const userEvents = data.usageEvents.filter(
       (event) => event.userId === userId,
+    );
+    const previousPublicStats = data.publicProfileStats.find(
+      (row) => row.userId === userId,
     );
     const grouped = new Map<string, StoredUsageEvent[]>();
     for (const event of userEvents) {
@@ -978,19 +1148,14 @@ export class TokSyncRepository {
         showCost: user.showCost,
         showSourceBreakdown: user.showSourceBreakdown,
         showModelBreakdown: user.showModelBreakdown,
-        dailyPublic: data.usageDaily
-          .filter((row) => row.userId === userId)
-          .map((row) => ({
-            date: row.date,
-            tokens: totalTokens(row.tokens),
-            costUsd: row.costUsd,
-          })),
-        leaderboardOptIn: false,
+        dailyPublic: aggregatePublicDaily(userEvents),
+        leaderboardOptIn: previousPublicStats?.leaderboardOptIn ?? false,
       };
       if (user.displayName) publicStats.displayName = user.displayName;
       if (user.avatarUrl) publicStats.avatarUrl = user.avatarUrl;
       data.publicProfileStats.push(publicStats);
     }
+    this.refreshCostAnomaliesInData(data, userId, now);
   }
 
   private userByName(data: TokSyncData, username: string) {
@@ -1145,6 +1310,118 @@ export class TokSyncRepository {
     }
   }
 
+  private refreshCostAnomaliesInData(
+    data: TokSyncData,
+    userId: string,
+    now: string,
+  ) {
+    const previousById = new Map(
+      data.costAnomalies
+        .filter((anomaly) => anomaly.userId === userId)
+        .map((anomaly) => [anomaly.id, anomaly]),
+    );
+    const otherAnomalies = data.costAnomalies.filter(
+      (anomaly) => anomaly.userId !== userId,
+    );
+    const nextAnomalies: CostAnomalyRecord[] = [];
+
+    const rules = data.costGuardrailRules.filter(
+      (rule) => rule.userId === userId && rule.enabled,
+    );
+    if (!rules.length) {
+      data.costAnomalies = otherAnomalies;
+      return;
+    }
+
+    const userEvents = data.usageEvents.filter(
+      (event) => event.userId === userId,
+    );
+    if (!userEvents.length) {
+      data.costAnomalies = otherAnomalies;
+      return;
+    }
+
+    for (const rule of rules) {
+      const scopedEvents = userEvents.filter((event) =>
+        matchesCostGuardrailRule(event, rule),
+      );
+      if (!scopedEvents.length) continue;
+
+      const latestDate = latestLocalDate(scopedEvents);
+      const window = costGuardrailWindow(rule.period, latestDate);
+      const periodEvents = scopedEvents.filter((event) =>
+        isWithinDateWindow(event.localDate, window),
+      );
+
+      const knownCostEvents = periodEvents.filter(
+        (event) => typeof event.costUsd === "number",
+      );
+      const periodCost = round(
+        knownCostEvents.reduce((sum, event) => sum + (event.costUsd ?? 0), 0),
+      );
+
+      if (periodCost > rule.limitUsd) {
+        nextAnomalies.push(
+          preserveCostAnomaly(
+            previousById,
+            buildCostAnomalyRecord(
+              userId,
+              rule,
+              "budget_exceeded",
+              "critical",
+              now,
+              {
+                periodStart: window.start,
+                periodEnd: window.end,
+                deltaUsd: round(periodCost - rule.limitUsd),
+                explanation: `${costGuardrailLabel(rule)} ${rule.period} cost reached $${periodCost.toFixed(2)} against a $${rule.limitUsd.toFixed(2)} limit.`,
+              },
+            ),
+          ),
+        );
+      }
+
+      const unknownPricingCount = periodEvents.length - knownCostEvents.length;
+      if (unknownPricingCount > 0) {
+        nextAnomalies.push(
+          preserveCostAnomaly(
+            previousById,
+            buildCostAnomalyRecord(
+              userId,
+              rule,
+              "unknown_pricing",
+              "warning",
+              now,
+              {
+                periodStart: window.start,
+                periodEnd: window.end,
+                explanation: `${unknownPricingCount} events in the ${costGuardrailLabel(rule)} ${rule.period} window have unknown pricing and are excluded from budget totals.`,
+              },
+            ),
+          ),
+        );
+      }
+
+      const spike = detectCostSpike(scopedEvents, rule, latestDate);
+      if (spike) {
+        nextAnomalies.push(
+          preserveCostAnomaly(
+            previousById,
+            buildCostAnomalyRecord(
+              userId,
+              rule,
+              "cost_spike",
+              "warning",
+              now,
+              spike,
+            ),
+          ),
+        );
+      }
+    }
+    data.costAnomalies = [...otherAnomalies, ...nextAnomalies];
+  }
+
   private refreshMergeIssuesInData(
     data: TokSyncData,
     userId: string,
@@ -1223,6 +1500,12 @@ export interface DashboardFilters {
   workspace?: string;
 }
 
+export interface LeaderboardQuery {
+  metric?: "tokens" | "active_days" | "streak" | "monthly_tokens";
+  period?: "all_time" | "weekly" | "monthly";
+  limit?: number;
+}
+
 const RECEIPT_UPLOADED_FIELDS = [
   "schemaVersion",
   "source",
@@ -1250,6 +1533,319 @@ const RECEIPT_EXCLUDED_FIELDS = [
   "secrets",
   "device names",
 ];
+
+function normalizeCostGuardrailInput(input: CostGuardrailInput) {
+  return {
+    scope: input.scope,
+    period: input.period,
+    limitUsd: round(input.limitUsd),
+    enabled: input.enabled,
+    source: input.scope === "source" ? input.source : undefined,
+    modelId: input.scope === "model" ? input.modelId : undefined,
+    deviceId: input.scope === "device" ? input.deviceId : undefined,
+  };
+}
+
+function sameCostGuardrailTarget(
+  rule: CostGuardrailRuleRecord,
+  userId: string,
+  input: CostGuardrailInput,
+) {
+  const normalized = normalizeCostGuardrailInput(input);
+  return (
+    rule.userId === userId &&
+    rule.scope === normalized.scope &&
+    rule.period === normalized.period &&
+    rule.source === normalized.source &&
+    rule.modelId === normalized.modelId &&
+    rule.deviceId === normalized.deviceId
+  );
+}
+
+function costGuardrailRuleView(rule: CostGuardrailRuleRecord) {
+  return {
+    id: rule.id,
+    scope: rule.scope,
+    source: rule.source,
+    modelId: rule.modelId,
+    deviceId: rule.deviceId,
+    period: rule.period,
+    limitUsd: rule.limitUsd,
+    enabled: rule.enabled,
+    createdAt: rule.createdAt,
+    updatedAt: rule.updatedAt,
+  };
+}
+
+function costAnomalyView(anomaly: CostAnomalyRecord) {
+  return {
+    id: anomaly.id,
+    ruleId: anomaly.ruleId,
+    type: anomaly.type,
+    severity: anomaly.severity,
+    source: anomaly.source,
+    modelId: anomaly.modelId,
+    deviceId: anomaly.deviceId,
+    periodStart: anomaly.periodStart,
+    periodEnd: anomaly.periodEnd,
+    deltaUsd: anomaly.deltaUsd,
+    explanation: anomaly.explanation,
+    status: anomaly.status,
+    createdAt: anomaly.createdAt,
+  };
+}
+
+function costGuardrailLabel(rule: CostGuardrailRuleRecord) {
+  if (rule.scope === "source") return `Source ${rule.source}`;
+  if (rule.scope === "model") return `Model ${rule.modelId}`;
+  if (rule.scope === "device") return "Device scope";
+  return "Global";
+}
+
+function latestLocalDate(events: StoredUsageEvent[]) {
+  return (
+    events
+      .map((event) => event.localDate)
+      .sort()
+      .at(-1) ?? new Date().toISOString().slice(0, 10)
+  );
+}
+
+function costGuardrailWindow(
+  period: CostGuardrailRuleRecord["period"],
+  latestDate: string,
+) {
+  if (period === "daily") {
+    return { start: latestDate, end: latestDate };
+  }
+  if (period === "weekly") {
+    return { start: addDaysToDateString(latestDate, -6), end: latestDate };
+  }
+  return {
+    start: `${latestDate.slice(0, 7)}-01`,
+    end: latestDate,
+  };
+}
+
+function addDaysToDateString(date: string, days: number) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function isWithinDateWindow(
+  date: string,
+  window: { start: string; end: string },
+) {
+  return date >= window.start && date <= window.end;
+}
+
+function matchesCostGuardrailRule(
+  event: StoredUsageEvent,
+  rule: CostGuardrailRuleRecord,
+) {
+  if (rule.scope === "source") return event.source === rule.source;
+  if (rule.scope === "model") return event.modelId === rule.modelId;
+  if (rule.scope === "device") return event.deviceId === rule.deviceId;
+  return true;
+}
+
+function buildCostAnomalyRecord(
+  userId: string,
+  rule: CostGuardrailRuleRecord,
+  type: CostAnomalyRecord["type"],
+  severity: CostAnomalyRecord["severity"],
+  now: string,
+  payload: {
+    periodStart?: string;
+    periodEnd?: string;
+    deltaUsd?: number;
+    explanation: string;
+  },
+): CostAnomalyRecord {
+  const fingerprint = [
+    userId,
+    rule.id,
+    type,
+    payload.periodStart ?? "",
+    payload.periodEnd ?? "",
+  ].join("\0");
+  const anomaly: CostAnomalyRecord = {
+    id: `cga_${sha256Base64Url(fingerprint).slice(0, 24)}`,
+    userId,
+    ruleId: rule.id,
+    type,
+    severity,
+    explanation: payload.explanation,
+    status: "open",
+    createdAt: now,
+  };
+  if (rule.source) anomaly.source = rule.source;
+  if (rule.modelId) anomaly.modelId = rule.modelId;
+  if (rule.deviceId) anomaly.deviceId = rule.deviceId;
+  if (payload.periodStart) anomaly.periodStart = payload.periodStart;
+  if (payload.periodEnd) anomaly.periodEnd = payload.periodEnd;
+  if (payload.deltaUsd !== undefined) anomaly.deltaUsd = payload.deltaUsd;
+  return anomaly;
+}
+
+function preserveCostAnomaly(
+  previousById: Map<string, CostAnomalyRecord>,
+  next: CostAnomalyRecord,
+) {
+  const previous = previousById.get(next.id);
+  if (!previous) return next;
+  return {
+    ...next,
+    status: previous.status,
+    createdAt: previous.createdAt,
+  };
+}
+
+function detectCostSpike(
+  scopedEvents: StoredUsageEvent[],
+  rule: CostGuardrailRuleRecord,
+  latestDate: string,
+) {
+  const dailyCosts = aggregateCostByDate(scopedEvents);
+  const latestCost = dailyCosts.get(latestDate) ?? 0;
+  if (latestCost <= 0) return null;
+
+  const baselineDates = [...dailyCosts.keys()]
+    .filter((date) => date < latestDate)
+    .sort()
+    .slice(-7);
+  if (!baselineDates.length) return null;
+
+  const baselineAverage =
+    baselineDates.reduce((sum, date) => sum + (dailyCosts.get(date) ?? 0), 0) /
+    baselineDates.length;
+  if (baselineAverage <= 0) return null;
+  if (latestCost < baselineAverage * 2 || latestCost - baselineAverage < 1) {
+    return null;
+  }
+
+  return {
+    periodStart: latestDate,
+    periodEnd: latestDate,
+    deltaUsd: round(latestCost - baselineAverage),
+    explanation: `${costGuardrailLabel(rule)} daily cost is $${latestCost.toFixed(2)}, versus a $${baselineAverage.toFixed(2)} baseline over the previous ${baselineDates.length} days.`,
+  };
+}
+
+function aggregateCostByDate(events: StoredUsageEvent[]) {
+  const totals = new Map<string, number>();
+  for (const event of events) {
+    if (typeof event.costUsd !== "number") continue;
+    totals.set(
+      event.localDate,
+      round((totals.get(event.localDate) ?? 0) + event.costUsd),
+    );
+  }
+  return totals;
+}
+
+function aggregatePublicDaily(events: StoredUsageEvent[]) {
+  const byDate = new Map<
+    string,
+    { date: string; tokens: number; costUsd: number }
+  >();
+  for (const event of events) {
+    const current = byDate.get(event.localDate) ?? {
+      date: event.localDate,
+      tokens: 0,
+      costUsd: 0,
+    };
+    current.tokens += totalTokens(event.tokens);
+    current.costUsd = round(current.costUsd + (event.costUsd ?? 0));
+    byDate.set(event.localDate, current);
+  }
+  return [...byDate.values()].sort((left, right) =>
+    left.date.localeCompare(right.date),
+  );
+}
+
+function leaderboardEntryFromPublicStats(
+  stats: PublicProfileStatsRecord,
+  metric: NonNullable<LeaderboardQuery["metric"]>,
+  period: NonNullable<LeaderboardQuery["period"]>,
+) {
+  const window = leaderboardWindowFromDailyPublic(stats.dailyPublic, period);
+  const metricValue =
+    metric === "tokens"
+      ? window.tokens
+      : metric === "active_days"
+        ? window.activeDays
+        : metric === "monthly_tokens"
+          ? leaderboardWindowFromDailyPublic(stats.dailyPublic, "monthly")
+              .tokens
+          : window.streak;
+
+  return {
+    username: stats.usernameLower,
+    displayName: stats.displayName,
+    avatarUrl: stats.avatarUrl,
+    totalTokens: stats.totalTokens,
+    activeDays: window.activeDays,
+    streak: window.streak,
+    monthlyTokens: leaderboardWindowFromDailyPublic(
+      stats.dailyPublic,
+      "monthly",
+    ).tokens,
+    metricValue,
+    lastSyncAt: stats.lastSyncAt,
+  };
+}
+
+function leaderboardWindowFromDailyPublic(
+  dailyPublic: PublicProfileStatsRecord["dailyPublic"],
+  period: NonNullable<LeaderboardQuery["period"]>,
+) {
+  if (!dailyPublic.length) {
+    return { tokens: 0, activeDays: 0, streak: 0 };
+  }
+  const sorted = [...dailyPublic].sort((left, right) =>
+    left.date.localeCompare(right.date),
+  );
+  const latestDate =
+    sorted.at(-1)?.date ?? new Date().toISOString().slice(0, 10);
+  const window =
+    period === "weekly"
+      ? { start: addDaysToDateString(latestDate, -6), end: latestDate }
+      : period === "monthly"
+        ? { start: `${latestDate.slice(0, 7)}-01`, end: latestDate }
+        : {
+            start: sorted[0]?.date ?? latestDate,
+            end: latestDate,
+          };
+  const filtered = sorted.filter((row) => isWithinDateWindow(row.date, window));
+  const tokens = round(filtered.reduce((sum, row) => sum + row.tokens, 0));
+  const activeDays = filtered.filter((row) => row.tokens > 0).length;
+  const streak = currentActiveStreak(filtered, window.end);
+  return { tokens, activeDays, streak };
+}
+
+function currentActiveStreak(
+  rows: Array<{ date: string; tokens: number }>,
+  latestDate: string,
+) {
+  const activeDates = new Set(
+    rows.filter((row) => row.tokens > 0).map((row) => row.date),
+  );
+  let streak = 0;
+  let cursor = latestDate;
+  while (activeDates.has(cursor)) {
+    streak += 1;
+    cursor = addDaysToDateString(cursor, -1);
+  }
+  return streak;
+}
+
+function nextLeaderboardSnapshotAt(now: string) {
+  const date = new Date(now);
+  date.setUTCHours(24, 0, 0, 0);
+  return date.toISOString();
+}
 
 function buildSyncReceipt(
   userId: string,

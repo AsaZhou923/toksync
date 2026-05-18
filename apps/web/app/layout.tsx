@@ -12,7 +12,9 @@ import {
   Monitor,
   Radar,
   Settings,
+  ShieldAlert,
   ShieldCheck,
+  Trophy,
   Workflow,
 } from "lucide-react";
 import "./globals.css";
@@ -36,6 +38,12 @@ const NAV_GROUPS = [
       { href: "/app/sources", label: "Sources", icon: Database },
       { href: "/app/models", label: "Models", icon: Workflow },
       { href: "/app/projects", label: "Projects", icon: FolderKanban },
+      {
+        href: "/app/budgets",
+        label: "Guardrails",
+        icon: ShieldAlert,
+        badge: "v0.3",
+      },
     ],
   },
   {
@@ -76,7 +84,7 @@ const NAV_GROUPS = [
       {
         href: "/app/leaderboard",
         label: "Leaderboard",
-        icon: Activity,
+        icon: Trophy,
         badge: "opt-in",
       },
     ],

@@ -635,6 +635,227 @@ describe("TokSync API", () => {
     expect(svg).not.toContain("sha256:private");
   });
 
+  it("requires private auth for cost guardrails and rejects invalid payloads", async () => {
+    const { api } = lockedContext();
+
+    expect((await api.request("/v1/cost-guardrails")).status).toBe(401);
+    expect(
+      (
+        await api.request("/v1/cost-guardrails", {
+          method: "POST",
+          body: JSON.stringify({
+            scope: "source",
+            period: "daily",
+            limitUsd: 5,
+            enabled: true,
+          }),
+          headers: { "Content-Type": "application/json" },
+        })
+      ).status,
+    ).toBe(401);
+
+    const { api: authedApi } = testContext();
+    const emptyGuardrails = await json<any>(
+      await authedApi.request("/v1/cost-guardrails", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const invalidPayload = await authedApi.request("/v1/cost-guardrails", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "source",
+        period: "daily",
+        limitUsd: 5,
+        enabled: true,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "demo",
+      },
+    });
+    const missingDeviceTarget = await authedApi.request("/v1/cost-guardrails", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "device",
+        deviceId: "11111111-1111-4111-8111-111111111111",
+        period: "daily",
+        limitUsd: 5,
+        enabled: true,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "demo",
+      },
+    });
+
+    expect(emptyGuardrails).toEqual({ rules: [], anomalies: [] });
+    expect(invalidPayload.status).toBe(400);
+    expect(await json(invalidPayload)).toMatchObject({
+      error: {
+        code: "invalid_payload",
+        message: "Invalid cost guardrail payload",
+      },
+    });
+    expect(missingDeviceTarget.status).toBe(404);
+    expect(await json(missingDeviceTarget)).toMatchObject({
+      error: {
+        code: "not_found",
+        message: "Guardrail device target was not found for this user",
+      },
+    });
+  });
+
+  it("blocks leaderboard opt-in until public profile is enabled and only lists opted-in public users", async () => {
+    const { api } = testContext();
+    const alice = await connectDevice(api, "alice", "leaderboard-alice");
+    const bob = await connectDevice(api, "bob", "leaderboard-bob");
+    const secretPath = "C:/Users/alice/private-leaderboard-workspace";
+
+    await postBatch(
+      api,
+      alice.deviceToken,
+      usageBatch(alice.deviceId, [
+        usageEvent(alice.deviceId, {
+          dedupKey: "codex:leaderboard-alice-old",
+          localDate: "2026-01-01",
+          timestampMs: Date.parse("2026-01-01T12:00:00.000Z"),
+          sourceSessionId: "leaderboard-old-session",
+          sourceMessageId: "leaderboard-old-message",
+          tokens: {
+            input: 1000,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoning: 0,
+          },
+          costUsd: 0.2,
+        }),
+        usageEvent(alice.deviceId, {
+          dedupKey: "codex:leaderboard-alice",
+          workspaceKeyHash: "sha256:leaderboard-private",
+          workspaceLabel: secretPath,
+          sourceSessionId: "leaderboard-session",
+          sourceMessageId: "leaderboard-message",
+        }),
+      ]),
+    );
+    await postBatch(
+      api,
+      bob.deviceToken,
+      usageBatch(bob.deviceId, [
+        usageEvent(bob.deviceId, {
+          dedupKey: "codex:leaderboard-bob",
+          sourceMessageId: "leaderboard-bob-message",
+          tokens: {
+            input: 200,
+            output: 40,
+            cacheRead: 5,
+            cacheWrite: 2,
+            reasoning: 10,
+          },
+          costUsd: 0.02,
+        }),
+      ]),
+    );
+
+    const blocked = await api.request("/v1/leaderboard/opt-in", {
+      method: "POST",
+      body: JSON.stringify({ enabled: true }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "alice",
+      },
+    });
+    expect(blocked.status).toBe(409);
+    expect(await json(blocked)).toMatchObject({
+      error: {
+        code: "invalid_payload",
+        details: { code: "public_profile_required" },
+      },
+    });
+
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: true,
+        showModelBreakdown: true,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "alice",
+      },
+    });
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: true,
+        showCost: false,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+      }),
+      headers: { "Content-Type": "application/json", "X-TokSync-User": "bob" },
+    });
+
+    const enabled = await json<any>(
+      await api.request("/v1/leaderboard/opt-in", {
+        method: "POST",
+        body: JSON.stringify({ enabled: true }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-TokSync-User": "alice",
+        },
+      }),
+    );
+    const leaderboard = await json<any>(await api.request("/v1/leaderboard"));
+    const weeklyLeaderboard = await json<any>(
+      await api.request("/v1/leaderboard?metric=tokens&period=weekly"),
+    );
+    const serialized = JSON.stringify(leaderboard);
+
+    expect(enabled).toMatchObject({
+      enabled: true,
+      nextSnapshotAt: expect.any(String),
+    });
+    expect(leaderboard.rows).toHaveLength(1);
+    expect(leaderboard.rows[0]).toMatchObject({
+      rank: 1,
+      username: "alice",
+      totalTokens: 1157,
+      metricValue: 1157,
+    });
+    expect(weeklyLeaderboard.rows[0]).toMatchObject({
+      username: "alice",
+      totalTokens: 1157,
+      metricValue: 157,
+    });
+    expect(leaderboard.rows[0]).not.toHaveProperty("deviceId");
+    expect(leaderboard.rows[0]).not.toHaveProperty("workspaceLabel");
+    expect(leaderboard.rows[0]).not.toHaveProperty("sourceSessionId");
+    expect(leaderboard.rows[0]).not.toHaveProperty("sourceMessageId");
+    expect(serialized).not.toContain(secretPath);
+    expect(serialized).not.toContain("sha256:leaderboard-private");
+    expect(serialized).not.toContain(alice.deviceId);
+    expect(serialized).not.toContain("leaderboard-session");
+    expect(serialized).not.toContain("leaderboard-message");
+    expect(serialized).not.toContain("leaderboard-old-session");
+    expect(serialized).not.toContain("leaderboard-old-message");
+    expect(serialized).not.toContain("bob");
+
+    await api.request("/v1/leaderboard/opt-in", {
+      method: "POST",
+      body: JSON.stringify({ enabled: false }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "alice",
+      },
+    });
+    expect(
+      (await json<any>(await api.request("/v1/leaderboard"))).rows,
+    ).toEqual([]);
+  });
+
   it("creates and revokes user API tokens for headless metrics sync", async () => {
     const { api } = testContext();
 

@@ -2,7 +2,7 @@
 
 [English](./README.md)
 
-TokSync v0.2 是一个面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
+TokSync v0.3 是一个面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
 
 当前仓库是可本地运行的 pnpm/Turbo monorepo。开发闭环仍以 `FileTokSyncStore` 为主，Postgres + Drizzle 保留为 hosted 目标。
 
@@ -10,8 +10,8 @@ TokSync v0.2 是一个面向 AI coding 工具的 metrics-only telemetry hub。�
 
 - CLI agent：`login`、`logout`、`status`、`sources list`、`sync --dry-run`、`sync`，并支持 `tsu_` user API token/headless sync。
 - Collector：Codex CLI、Claude Code、OpenCode 风格 JSON/JSONL 用量文件。
-- API：设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、metrics JSON/CSV export、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card。
-- Web：dashboard、activity、devices、sources、health、receipts、merge、exports/local viewer、models、projects、sync runs、embed、settings、docs、公开 profile。
+- API：设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、leaderboard opt-in、metrics JSON/CSV export、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card。
+- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、exports/local viewer、models、projects、sync runs、embed、settings、docs、公开 profile。
 - Public output：只读取 public aggregate cache，默认关闭。
 - 测试：Vitest、Playwright E2E、visual smoke、perf smoke、Turbo typecheck/lint/build。
 
@@ -58,9 +58,11 @@ TOKSYNC_API_TOKEN=tsu_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 - Receipt、Merge、Health、Export 使用低敏字段类别和聚合摘要，不返回 prompt、assistant reply、tool args、tool output、file content、raw path、source session id、source message id 或 workspace hash。
 - 设备指纹不得由 hostname、硬件标识、用户名、home path 或项目路径推导。
 - cost 是估算，不是 provider billing truth。
-- content sync、search、eval export、leaderboard、Cost Guardrails、Private Usage Vault 和 Public Proof Pack 仍是后续 opt-in 能力。
+- Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。
+- leaderboard 需要先开启 public profile，再单独 opt-in，并且只读取 public aggregate cache。
+- content sync、search、eval export、Private Usage Vault 和 Public Proof Pack 仍是后续 opt-in 能力。
 
-## v0.2 范围
+## v0.3 范围
 
 | 能力                           | 当前状态       | 边界                                                          |
 | ------------------------------ | -------------- | ------------------------------------------------------------- |
@@ -70,8 +72,10 @@ TOKSYNC_API_TOKEN=tsu_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 | User API token                 | 已实现最小闭环 | 创建/列出/撤销 metadata，明文 token 只由 API 创建响应返回一次 |
 | Metrics export/local viewer    | 已实现最小闭环 | JSON/CSV 只导出安全 metrics 列                                |
 | Submitted public data deletion | 已实现最小闭环 | 清理公开 cache，不删除私有 raw metrics                        |
+| Cost Guardrails                | 已实现第一版   | 私有预算阈值、cost spike、unknown pricing、budget exceeded    |
+| Leaderboard                    | 已实现第一版   | public profile + 单独 opt-in，只读取公开聚合 cache            |
 
-仍不属于当前范围：生产 GitHub OAuth、leaderboard、billing/订阅/支付、Cost Guardrails、Private Usage Vault、content sync、全文/语义搜索、eval dataset export、团队版。
+仍不属于当前范围：生产 GitHub OAuth、billing/订阅/支付、Private Usage Vault、content sync、全文/语义搜索、eval dataset export、团队版、leaderboard 的 source/model/cursor 分页增强、duplicate_cost_jump 异常解释。
 
 ## 常用命令
 

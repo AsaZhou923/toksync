@@ -1,4 +1,9 @@
-import type { TokenBreakdown, UsageEventV1 } from "@toksync/shared";
+import type {
+  CostGuardrailPeriod,
+  CostGuardrailScope,
+  TokenBreakdown,
+  UsageEventV1,
+} from "@toksync/shared";
 
 export interface UserRecord {
   id: string;
@@ -194,6 +199,37 @@ export interface PublicProfileStatsRecord extends ProfileStatsRecord {
   leaderboardOptIn: boolean;
 }
 
+export interface CostGuardrailRuleRecord {
+  id: string;
+  userId: string;
+  scope: CostGuardrailScope;
+  source?: string;
+  modelId?: string;
+  deviceId?: string;
+  period: CostGuardrailPeriod;
+  limitUsd: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CostAnomalyRecord {
+  id: string;
+  userId: string;
+  ruleId?: string;
+  type: "budget_exceeded" | "cost_spike" | "unknown_pricing";
+  severity: "info" | "warning" | "critical";
+  source?: string;
+  modelId?: string;
+  deviceId?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  deltaUsd?: number;
+  explanation: string;
+  status: "open" | "acknowledged" | "resolved";
+  createdAt: string;
+}
+
 export interface TokSyncData {
   users: UserRecord[];
   devices: DeviceRecord[];
@@ -208,6 +244,8 @@ export interface TokSyncData {
   usageDaily: UsageDailyRecord[];
   profileStats: ProfileStatsRecord[];
   publicProfileStats: PublicProfileStatsRecord[];
+  costGuardrailRules: CostGuardrailRuleRecord[];
+  costAnomalies: CostAnomalyRecord[];
 }
 
 export function emptyTokSyncData(): TokSyncData {
@@ -225,5 +263,7 @@ export function emptyTokSyncData(): TokSyncData {
     usageDaily: [],
     profileStats: [],
     publicProfileStats: [],
+    costGuardrailRules: [],
+    costAnomalies: [],
   };
 }

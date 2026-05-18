@@ -51,6 +51,54 @@ export const publicProfileInputSchema = z.object({
   showModelBreakdown: z.boolean().default(false),
 });
 
+export const costGuardrailScopeSchema = z.enum([
+  "global",
+  "source",
+  "model",
+  "device",
+]);
+
+export const costGuardrailPeriodSchema = z.enum(["daily", "weekly", "monthly"]);
+
+export const costGuardrailInputSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    scope: costGuardrailScopeSchema,
+    source: z.string().min(1).max(64).optional(),
+    modelId: z.string().min(1).max(160).optional(),
+    deviceId: z.string().uuid().optional(),
+    period: costGuardrailPeriodSchema,
+    limitUsd: z.number().positive(),
+    enabled: z.boolean().default(true),
+  })
+  .superRefine((input, ctx) => {
+    if (input.scope === "source" && !input.source) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["source"],
+        message: "source is required when scope is source",
+      });
+    }
+    if (input.scope === "model" && !input.modelId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["modelId"],
+        message: "modelId is required when scope is model",
+      });
+    }
+    if (input.scope === "device" && !input.deviceId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["deviceId"],
+        message: "deviceId is required when scope is device",
+      });
+    }
+  });
+
+export const leaderboardOptInInputSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const userApiTokenInputSchema = z.object({
   name: z.string().min(1).max(80).default("TokSync API token"),
   scopes: z
@@ -89,6 +137,10 @@ export type UsageBatchV1 = z.infer<typeof usageBatchV1Schema> & {
 };
 export type UsageBatchEnvelope = z.infer<typeof usageBatchV1Schema>;
 export type PublicProfileInput = z.infer<typeof publicProfileInputSchema>;
+export type CostGuardrailScope = z.infer<typeof costGuardrailScopeSchema>;
+export type CostGuardrailPeriod = z.infer<typeof costGuardrailPeriodSchema>;
+export type CostGuardrailInput = z.infer<typeof costGuardrailInputSchema>;
+export type LeaderboardOptInInput = z.infer<typeof leaderboardOptInInputSchema>;
 export type UserApiTokenInput = z.infer<typeof userApiTokenInputSchema>;
 export type MergeIssueResolutionInput = z.infer<
   typeof mergeIssueResolutionInputSchema

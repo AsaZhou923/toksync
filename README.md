@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img alt="stage" src="https://img.shields.io/badge/stage-v0.2-0f7b59?style=flat-square" />
+  <img alt="stage" src="https://img.shields.io/badge/stage-v0.3-0f7b59?style=flat-square" />
   <img alt="payload" src="https://img.shields.io/badge/payload-metrics--only-315fbd?style=flat-square" />
   <img alt="public data" src="https://img.shields.io/badge/public%20data-opt--in-b66f09?style=flat-square" />
   <img alt="package manager" src="https://img.shields.io/badge/pnpm-9.15.9-f69220?style=flat-square" />
@@ -29,25 +29,25 @@
 
 ## What TokSync Is
 
-TokSync v0.2 is a local-first telemetry hub for AI coding tools. It aggregates
+TokSync v0.3 is a local-first telemetry hub for AI coding tools. It aggregates
 token counts, approximate cost, model, source, device, and workspace-label usage
 across machines while keeping private content out of the sync payload.
 
 The product direction follows Tokscale's strong usage/profile/README embed loop,
 but TokSync's default path is private multi-device aggregation. Public profile,
-README badge/card, and any future leaderboard remain explicit opt-in layers.
+README badge/card, and leaderboard remain explicit opt-in layers.
 
 ## Current Console
 
-| Surface            | Current behavior                                                |
-| ------------------ | --------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run |
-| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures  |
-| API                | Device login, user API tokens, receipts, health, merge, export  |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default        |
-| Web                | Dashboard, devices, health, receipts, merge, local viewer       |
-| Public output      | README badge/profile-card SVG from public aggregate cache only  |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks  |
+| Surface            | Current behavior                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                         |
+| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures                          |
+| API                | Device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard         |
+| Public output      | README badge/profile-card SVG from public aggregate cache only                          |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                          |
 
 ## Quick Start
 
@@ -120,28 +120,33 @@ for the hosted Postgres target.
 - Device fingerprinting must not derive from hardware identifiers, hostname,
   username, home path, or project path.
 - Cost is approximate usage estimation, not provider billing truth.
-- Content sync, search, eval export, leaderboard, cost guardrails, vault, and
-  proof-pack workflows are future opt-in features, not current behavior.
+- Cost Guardrails are private-only and never feed public profile, README SVG, or
+  leaderboard output.
+- Leaderboard participation requires public profile plus a second explicit
+  opt-in and reads public aggregate cache only.
+- Content sync, search, eval export, vault, and proof-pack workflows are future
+  opt-in features, not current behavior.
 
 ## Roadmap Boundaries
 
 The external specs track Tokscale parity and TokSync-specific governance
-features. The v0.2 private governance slice is implemented locally; later
-public and cost-governance items remain scoped out:
+features. The v0.2 private governance slice is implemented locally, and v0.3
+adds the first cost-governance and public leaderboard cut:
 
-| Phase | Planned capability   | Boundary                                       |
-| ----- | -------------------- | ---------------------------------------------- |
-| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries |
-| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups  |
-| v0.2  | Source Health Radar  | Implemented for source sync status/freshness   |
-| v0.2  | User API token       | Implemented for private/headless metrics sync  |
-| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs       |
-| v0.3  | Cost Guardrails      | Flag spikes, unknown pricing, budget drift     |
-| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore           |
-| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates   |
+| Phase | Planned capability   | Boundary                                                      |
+| ----- | -------------------- | ------------------------------------------------------------- |
+| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                |
+| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                 |
+| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                  |
+| v0.2  | User API token       | Implemented for private/headless metrics sync                 |
+| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                      |
+| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts |
+| v0.3  | Leaderboard          | Implemented as public-profile + opt-in, public cache only     |
+| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore                          |
+| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates                  |
 
-Leaderboard, billing, subscriptions, payment providers, plan limits, and billing
-UI are out of scope for v0.1.
+Billing, subscriptions, payment providers, plan limits, billing UI, content
+sync, search, eval export, and Private Usage Vault remain out of scope.
 
 ## Useful Commands
 
