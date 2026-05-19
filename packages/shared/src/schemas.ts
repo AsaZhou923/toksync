@@ -49,6 +49,7 @@ export const publicProfileInputSchema = z.object({
   showCost: z.boolean().default(false),
   showSourceBreakdown: z.boolean().default(false),
   showModelBreakdown: z.boolean().default(false),
+  showWorkspaceBreakdown: z.boolean().default(false),
 });
 
 export const costGuardrailScopeSchema = z.enum([
@@ -136,7 +137,7 @@ export type UsageBatchV1 = z.infer<typeof usageBatchV1Schema> & {
   events: UsageEventV1[];
 };
 export type UsageBatchEnvelope = z.infer<typeof usageBatchV1Schema>;
-export type PublicProfileInput = z.infer<typeof publicProfileInputSchema>;
+export type PublicProfileInput = z.input<typeof publicProfileInputSchema>;
 export type CostGuardrailScope = z.infer<typeof costGuardrailScopeSchema>;
 export type CostGuardrailPeriod = z.infer<typeof costGuardrailPeriodSchema>;
 export type CostGuardrailInput = z.infer<typeof costGuardrailInputSchema>;

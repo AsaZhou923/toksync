@@ -78,6 +78,7 @@ export interface PublicProfileState {
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown: boolean;
   leaderboardOptIn?: boolean;
   url?: string;
 }
@@ -165,9 +166,11 @@ export interface PublicProfileStats {
   activeDays: number;
   topSources: BreakdownRow[];
   topModels: BreakdownRow[];
+  topWorkspaces: BreakdownRow[];
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown: boolean;
   dailyPublic?: Array<{ date: string; tokens: number; costUsd: number }>;
 }
 

@@ -293,6 +293,9 @@ export default async function AppDashboardPage() {
               <span className="pill">
                 models {publicProfile?.showModelBreakdown ? "on" : "off"}
               </span>
+              <span className="pill">
+                projects {publicProfile?.showWorkspaceBreakdown ? "on" : "off"}
+              </span>
             </div>
             <div className="proof-squares">
               {Array.from({ length: 21 }).map((_, index) => (

@@ -144,6 +144,7 @@ describe("TokSyncRepository", () => {
       showCost: false,
       showSourceBreakdown: false,
       showModelBreakdown: false,
+      showWorkspaceBreakdown: false,
       createdAt: "2026-05-17T00:00:00.000Z",
       updatedAt: "2026-05-17T00:00:00.000Z",
     });
@@ -157,6 +158,7 @@ describe("TokSyncRepository", () => {
       showCost: false,
       showSourceBreakdown: false,
       showModelBreakdown: false,
+      showWorkspaceBreakdown: false,
       createdAt: "2026-05-17T00:00:00.000Z",
       updatedAt: "2026-05-17T00:00:00.000Z",
     });

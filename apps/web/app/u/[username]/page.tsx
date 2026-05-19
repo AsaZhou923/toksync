@@ -104,6 +104,12 @@ export default async function PublicProfilePage({
             <span className={`pill ${stats?.showModelBreakdown ? "good" : ""}`}>
               model mix {stats?.showModelBreakdown ? "visible" : "hidden"}
             </span>
+            <span
+              className={`pill ${stats?.showWorkspaceBreakdown ? "good" : ""}`}
+            >
+              project labels{" "}
+              {stats?.showWorkspaceBreakdown ? "visible" : "hidden"}
+            </span>
           </div>
           <div className="stack-list">
             <span>Badge endpoint: {badge}</span>
@@ -141,6 +147,30 @@ export default async function PublicProfilePage({
           <h2 className="section-title">Public model mix</h2>
           <div className="source-grid">
             {(stats?.topModels ?? []).map((row: BreakdownRow) => (
+              <div className="source-item" key={row.key}>
+                <b>{row.key}</b>
+                <span className="bar-track">
+                  <span
+                    className="bar-fill"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(6, (row.tokens / totalTokens) * 100),
+                      )}%`,
+                    }}
+                  />
+                </span>
+                <span className="muted">{formatCompactNumber(row.tokens)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {stats?.showWorkspaceBreakdown ? (
+        <section className="card">
+          <h2 className="section-title">Public project labels</h2>
+          <div className="source-grid">
+            {(stats?.topWorkspaces ?? []).map((row: BreakdownRow) => (
               <div className="source-item" key={row.key}>
                 <b>{row.key}</b>
                 <span className="bar-track">

@@ -23,6 +23,7 @@ import {
   FORBIDDEN_CONTENT_KEYS,
   assertMetricsOnlyPayload,
   hashOpaqueValue,
+  sanitizeWorkspaceLabel,
   sha256Base64Url,
 } from "@toksync/privacy";
 import { FileTokSyncStore } from "./store";
@@ -62,6 +63,14 @@ export interface UserApiTokenAuthContext {
   token: UserApiTokenRecord;
 }
 
+export interface GitHubUserProfile {
+  githubId: string;
+  username: string;
+  email?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+}
+
 export class CostGuardrailTargetError extends Error {
   constructor(message: string) {
     super(message);
@@ -87,6 +96,45 @@ function requireSecret(name: keyof NodeJS.ProcessEnv) {
     );
   }
   return value;
+}
+
+function githubUsername(username: string) {
+  const normalized = username.trim();
+  if (isValidUsername(normalized)) return normalized;
+  const fallback = normalized
+    .replace(/[^A-Za-z0-9-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 39);
+  return isValidUsername(fallback) ? fallback : "github-user";
+}
+
+function uniqueGitHubUsername(
+  data: TokSyncData,
+  preferredUsername: string,
+  githubId: string,
+) {
+  const preferredLower = normalizeUsername(preferredUsername);
+  const existing = data.users.find(
+    (item) => item.usernameLower === preferredLower,
+  );
+  if (!existing || existing.githubId === githubId || !existing.githubId) {
+    return preferredUsername;
+  }
+
+  const suffix = `-${githubId}`.slice(0, 8);
+  const base = preferredUsername.slice(0, 39 - suffix.length);
+  let candidate = `${base}${suffix}`;
+  let counter = 2;
+  while (
+    data.users.some(
+      (item) => item.usernameLower === normalizeUsername(candidate),
+    )
+  ) {
+    const nextSuffix = `-${counter}`;
+    candidate = `${base.slice(0, 39 - nextSuffix.length)}${nextSuffix}`;
+    counter += 1;
+  }
+  return candidate;
 }
 
 export class TokSyncRepository {
@@ -123,6 +171,7 @@ export class TokSyncRepository {
         showCost: false,
         showSourceBreakdown: false,
         showModelBreakdown: false,
+        showWorkspaceBreakdown: false,
         createdAt: now,
         updatedAt: now,
         ...patch,
@@ -138,6 +187,49 @@ export class TokSyncRepository {
   getUser(username = "demo") {
     const lower = normalizeUsername(username);
     return this.store.read().users.find((item) => item.usernameLower === lower);
+  }
+
+  ensureGitHubUser(profile: GitHubUserProfile) {
+    const data = this.store.read();
+    const now = new Date().toISOString();
+    const preferredUsername = githubUsername(profile.username);
+    let user = data.users.find((item) => item.githubId === profile.githubId);
+    user ??= data.users.find(
+      (item) =>
+        item.usernameLower === normalizeUsername(preferredUsername) &&
+        !item.githubId,
+    );
+    if (!user) {
+      const username = uniqueGitHubUsername(
+        data,
+        preferredUsername,
+        profile.githubId,
+      );
+      user = {
+        id: randomUUID(),
+        username,
+        usernameLower: normalizeUsername(username),
+        publicProfileEnabled: false,
+        showCost: false,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+        showWorkspaceBreakdown: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.users.push(user);
+    }
+    Object.assign(user, {
+      githubId: profile.githubId,
+      username: user.username,
+      usernameLower: normalizeUsername(user.username),
+      updatedAt: now,
+    });
+    if (profile.email) user.email = profile.email;
+    if (profile.displayName) user.displayName = profile.displayName;
+    if (profile.avatarUrl) user.avatarUrl = profile.avatarUrl;
+    this.store.write(data);
+    return user;
   }
 
   createDeviceCode(input: DeviceStartInput) {
@@ -284,7 +376,7 @@ export class TokSyncRepository {
   authenticateUserApiToken(
     rawToken?: string | null,
   ): UserApiTokenAuthContext | null {
-    if (!rawToken?.startsWith("tsu_")) return null;
+    if (!rawToken?.startsWith("tsk_")) return null;
     const data = this.store.read();
     const tokenHash = this.hashToken(rawToken);
     const token = data.userApiTokens.find((item) =>
@@ -315,7 +407,7 @@ export class TokSyncRepository {
     const data = this.store.read();
     const user = this.ensureUser(username);
     const now = new Date().toISOString();
-    const rawToken = `tsu_${randomBytes(32).toString("base64url")}`;
+    const rawToken = `tsk_${randomBytes(32).toString("base64url")}`;
     const token: UserApiTokenRecord = {
       id: randomUUID(),
       userId: user.id,
@@ -352,6 +444,8 @@ export class TokSyncRepository {
         username: user.username,
         displayName: user.displayName,
         avatarUrl: user.avatarUrl,
+        email: user.email,
+        authProvider: user.githubId ? "github" : "development",
       },
     };
   }
@@ -971,6 +1065,7 @@ export class TokSyncRepository {
       showCost: input.showCost,
       showSourceBreakdown: input.showSourceBreakdown,
       showModelBreakdown: input.showModelBreakdown,
+      showWorkspaceBreakdown: input.showWorkspaceBreakdown,
       updatedAt: new Date().toISOString(),
     });
     this.recomputeUserInData(data, current.id);
@@ -1148,6 +1243,7 @@ export class TokSyncRepository {
         showCost: user.showCost,
         showSourceBreakdown: user.showSourceBreakdown,
         showModelBreakdown: user.showModelBreakdown,
+        showWorkspaceBreakdown: user.showWorkspaceBreakdown,
         dailyPublic: aggregatePublicDaily(userEvents),
         leaderboardOptIn: previousPublicStats?.leaderboardOptIn ?? false,
       };
@@ -1208,7 +1304,7 @@ export class TokSyncRepository {
       return { user, device };
     }
 
-    if (rawToken.startsWith("tsu_")) {
+    if (rawToken.startsWith("tsk_")) {
       const token = data.userApiTokens.find((item) =>
         constantTimeEqual(item.tokenHash, tokenHash),
       );
@@ -2101,6 +2197,7 @@ function buildProfileStats(
     activeDays: dates.length,
     topSources: breakdown(events, "source"),
     topModels: breakdown(events, "modelId"),
+    topWorkspaces: publicWorkspaceBreakdown(events),
     updatedAt: now,
   };
   if (dates[0]) profile.dateStart = dates[0];
@@ -2163,6 +2260,24 @@ function breakdown(
     })
     .sort((a, b) => b.tokens - a.tokens)
     .slice(0, 10);
+}
+
+function publicWorkspaceBreakdown(events: StoredUsageEvent[]): BreakdownRow[] {
+  const publicEvents: StoredUsageEvent[] = [];
+  for (const event of events) {
+    const workspaceLabel = publicWorkspaceLabel(event.workspaceLabel);
+    if (workspaceLabel) publicEvents.push({ ...event, workspaceLabel });
+  }
+  return breakdown(publicEvents, "workspaceLabel");
+}
+
+function publicWorkspaceLabel(label: string | undefined) {
+  if (!label) return null;
+  if (label.includes("/") || label.includes("\\") || label.includes(":")) {
+    return null;
+  }
+  const sanitized = sanitizeWorkspaceLabel(label);
+  return sanitized === label ? sanitized : null;
 }
 
 function storedEventFingerprint(event: UsageEventV1) {

@@ -147,7 +147,7 @@ function hydrateTokSyncData(data: TokSyncData): TokSyncData {
   return {
     ...empty,
     ...data,
-    users: data.users ?? empty.users,
+    users: (data.users ?? empty.users).map(hydrateUser),
     devices: data.devices ?? empty.devices,
     deviceTokens: data.deviceTokens ?? empty.deviceTokens,
     userApiTokens: data.userApiTokens ?? empty.userApiTokens,
@@ -159,9 +159,37 @@ function hydrateTokSyncData(data: TokSyncData): TokSyncData {
     mergeIssues: data.mergeIssues ?? empty.mergeIssues,
     usageEvents: data.usageEvents ?? empty.usageEvents,
     usageDaily: data.usageDaily ?? empty.usageDaily,
-    profileStats: data.profileStats ?? empty.profileStats,
-    publicProfileStats: data.publicProfileStats ?? empty.publicProfileStats,
+    profileStats: (data.profileStats ?? empty.profileStats).map(
+      hydrateProfileStats,
+    ),
+    publicProfileStats: (
+      data.publicProfileStats ?? empty.publicProfileStats
+    ).map(hydratePublicProfileStats),
     costGuardrailRules: data.costGuardrailRules ?? empty.costGuardrailRules,
     costAnomalies: data.costAnomalies ?? empty.costAnomalies,
+  };
+}
+
+function hydrateUser(user: TokSyncData["users"][number]) {
+  return {
+    ...user,
+    showWorkspaceBreakdown: user.showWorkspaceBreakdown ?? false,
+  };
+}
+
+function hydrateProfileStats(stats: TokSyncData["profileStats"][number]) {
+  return {
+    ...stats,
+    topWorkspaces: stats.topWorkspaces ?? [],
+  };
+}
+
+function hydratePublicProfileStats(
+  stats: TokSyncData["publicProfileStats"][number],
+) {
+  return {
+    ...stats,
+    topWorkspaces: stats.topWorkspaces ?? [],
+    showWorkspaceBreakdown: stats.showWorkspaceBreakdown ?? false,
   };
 }

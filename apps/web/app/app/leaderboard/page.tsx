@@ -20,6 +20,7 @@ export default async function LeaderboardPage() {
     showCost: false,
     showSourceBreakdown: false,
     showModelBreakdown: false,
+    showWorkspaceBreakdown: false,
   };
 
   let initialRows: LeaderboardResponse["rows"] = [];

@@ -31,6 +31,9 @@ export const users = pgTable("users", {
     .notNull()
     .default(false),
   showModelBreakdown: boolean("show_model_breakdown").notNull().default(false),
+  showWorkspaceBreakdown: boolean("show_workspace_breakdown")
+    .notNull()
+    .default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -257,6 +260,7 @@ export const profileStats = pgTable("profile_stats", {
   activeDays: integer("active_days").notNull(),
   topSources: jsonb("top_sources").notNull(),
   topModels: jsonb("top_models").notNull(),
+  topWorkspaces: jsonb("top_workspaces").notNull(),
   dateStart: date("date_start"),
   dateEnd: date("date_end"),
   lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
@@ -280,6 +284,7 @@ export const publicProfileStats = pgTable("public_profile_stats", {
   activeDays: integer("active_days").notNull(),
   topSources: jsonb("top_sources").notNull(),
   topModels: jsonb("top_models").notNull(),
+  topWorkspaces: jsonb("top_workspaces").notNull(),
   dateStart: date("date_start"),
   dateEnd: date("date_end"),
   lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
@@ -288,6 +293,9 @@ export const publicProfileStats = pgTable("public_profile_stats", {
     .notNull()
     .default(false),
   showModelBreakdown: boolean("show_model_breakdown").notNull().default(false),
+  showWorkspaceBreakdown: boolean("show_workspace_breakdown")
+    .notNull()
+    .default(false),
   dailyPublic: jsonb("daily_public"),
   leaderboardOptIn: boolean("leaderboard_opt_in").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true })

@@ -14,12 +14,12 @@ function testContext() {
   return { api: createApiApp({ repo }), repo };
 }
 
-function lockedContext() {
+function lockedContext(options: Parameters<typeof createApiApp>[0] = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "toksync-api-locked-"));
   const repo = new TokSyncRepository(
     new FileTokSyncStore(path.join(dir, "db.json")),
   );
-  return { api: createApiApp({ repo, devAuth: false }), repo };
+  return { api: createApiApp({ repo, devAuth: false, ...options }), repo };
 }
 
 async function json<T = unknown>(response: Response): Promise<T> {
@@ -164,6 +164,11 @@ async function postBatch(
   });
 }
 
+function cookieHeader(setCookie: string | null, name: string) {
+  const match = setCookie?.match(new RegExp(`${name}=[^;,]+`));
+  return match?.[0] ?? "";
+}
+
 describe("TokSync API", () => {
   it("does not trust dev user headers when dev auth is disabled", async () => {
     const { api, repo } = lockedContext();
@@ -195,6 +200,87 @@ describe("TokSync API", () => {
     ]) {
       expect((await request()).status).toBe(401);
     }
+  });
+
+  it("authenticates hosted users through GitHub OAuth session cookies", async () => {
+    const calls: string[] = [];
+    const githubFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/access_token")) {
+        return Response.json({ access_token: "gho_test" });
+      }
+      if (url.endsWith("/user")) {
+        return Response.json({
+          id: 12345,
+          login: "octocat",
+          name: "Octo Cat",
+          avatar_url: "https://avatars.example/octocat.png",
+        });
+      }
+      if (url.endsWith("/user/emails")) {
+        return Response.json([
+          { email: "octocat@example.com", primary: true, verified: true },
+        ]);
+      }
+      return Response.json({}, { status: 404 });
+    };
+    const { api } = lockedContext({
+      sessionSecret: "test-session-secret",
+      githubOAuth: {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        redirectUri: "http://localhost:4000/v1/auth/github/callback",
+        authorizeUrl: "https://github.example/login/oauth/authorize",
+        tokenUrl: "https://github.example/login/oauth/access_token",
+        userUrl: "https://api.github.example/user",
+        emailsUrl: "https://api.github.example/user/emails",
+        fetch: githubFetch,
+      },
+    });
+
+    const start = await api.request("/v1/auth/github/start");
+    const location = start.headers.get("location") ?? "";
+    const state = new URL(location).searchParams.get("state");
+    const stateCookie = cookieHeader(
+      start.headers.get("set-cookie"),
+      "toksync_oauth_state",
+    );
+
+    expect(start.status).toBe(302);
+    expect(location).toContain("client_id=client-id");
+    expect(state).toBeTruthy();
+    expect(stateCookie).toContain("toksync_oauth_state=");
+
+    const callback = await api.request(
+      `/v1/auth/github/callback?code=abc&state=${state}`,
+      { headers: { Cookie: stateCookie } },
+    );
+    const sessionCookie = cookieHeader(
+      callback.headers.get("set-cookie"),
+      "toksync_session",
+    );
+    const session = await json<any>(
+      await api.request("/v1/auth/session", {
+        headers: { Cookie: sessionCookie },
+      }),
+    );
+
+    expect(callback.status).toBe(302);
+    expect(calls).toEqual([
+      "https://github.example/login/oauth/access_token",
+      "https://api.github.example/user",
+      "https://api.github.example/user/emails",
+    ]);
+    expect(session.user).toMatchObject({
+      username: "octocat",
+      displayName: "Octo Cat",
+      email: "octocat@example.com",
+      authProvider: "github",
+    });
+    expect(
+      (await api.request("/v1/auth/magic-link", { method: "POST" })).status,
+    ).toBe(404);
   });
 
   it("requires owner auth before authorizing a device code", async () => {
@@ -591,6 +677,12 @@ describe("TokSync API", () => {
         workspaceLabel: secretPath,
         dedupKey: "codex:private-field-check",
       }),
+      usageEvent(auth.deviceId, {
+        workspaceKeyHash: "sha256:public-label",
+        workspaceLabel: "oss-repo",
+        dedupKey: "codex:public-label-check",
+        sourceMessageId: "message-public-label",
+      }),
     ]);
     await postBatch(api, auth.deviceToken, payload);
 
@@ -628,11 +720,35 @@ describe("TokSync API", () => {
 
     expect(badge.status).toBe(200);
     expect(card.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(publicProfile.profile.totalTokens).toBe(157);
-    expect(svg).toContain("$0.01");
+    expect(publicProfile.profile.totalTokens).toBe(314);
+    expect(publicProfile.profile.showWorkspaceBreakdown).toBe(false);
+    expect(publicProfile.profile.topWorkspaces).toEqual([]);
+    expect(svg).toContain("$0.0200");
     expect(svg).not.toContain("<script");
     expect(svg).not.toContain(secretPath);
     expect(svg).not.toContain("sha256:private");
+
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: true,
+        showModelBreakdown: true,
+        showWorkspaceBreakdown: true,
+      }),
+      headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
+    });
+    const profileWithProjects = await json<any>(
+      await api.request("/v1/public-profile/demo"),
+    );
+    const serializedProfile = JSON.stringify(profileWithProjects);
+
+    expect(profileWithProjects.profile.topWorkspaces).toEqual([
+      { key: "oss-repo", tokens: 157, costUsd: 0.01, messages: 1 },
+    ]);
+    expect(serializedProfile).not.toContain(secretPath);
+    expect(serializedProfile).not.toContain("sha256:private");
   });
 
   it("requires private auth for cost guardrails and rejects invalid payloads", async () => {
@@ -812,6 +928,8 @@ describe("TokSync API", () => {
     const weeklyLeaderboard = await json<any>(
       await api.request("/v1/leaderboard?metric=tokens&period=weekly"),
     );
+    const sourceLeaderboard = await api.request("/v1/leaderboard?source=codex");
+    const modelLeaderboard = await api.request("/v1/leaderboard?model=gpt-5.4");
     const serialized = JSON.stringify(leaderboard);
 
     expect(enabled).toMatchObject({
@@ -829,6 +947,14 @@ describe("TokSync API", () => {
       username: "alice",
       totalTokens: 1157,
       metricValue: 157,
+    });
+    expect(sourceLeaderboard.status).toBe(400);
+    expect(modelLeaderboard.status).toBe(400);
+    expect(await json(sourceLeaderboard)).toMatchObject({
+      error: {
+        code: "unsupported_query",
+        message: "Leaderboard is global-only; 'source' is not supported",
+      },
     });
     expect(leaderboard.rows[0]).not.toHaveProperty("deviceId");
     expect(leaderboard.rows[0]).not.toHaveProperty("workspaceLabel");
@@ -869,7 +995,7 @@ describe("TokSync API", () => {
         },
       }),
     );
-    expect(created.token).toMatch(/^tsu_/);
+    expect(created.token).toMatch(/^tsk_/);
     expect(JSON.stringify(created.metadata)).not.toContain(created.token);
     expect(JSON.stringify(created.metadata)).not.toContain("tokenHash");
     expect(JSON.stringify(created.metadata)).not.toContain("userId");

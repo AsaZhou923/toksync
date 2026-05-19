@@ -16,6 +16,7 @@ export default async function SettingsPage() {
     showCost: false,
     showSourceBreakdown: false,
     showModelBreakdown: false,
+    showWorkspaceBreakdown: false,
   };
   const devices = (await apiGet<DevicesResponse>("/v1/devices"))?.devices ?? [];
 

@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
 import { cors } from "hono/cors";
 import {
@@ -10,6 +11,7 @@ import {
   CostGuardrailTargetError,
   TokSyncRepository,
   type DashboardFilters,
+  type GitHubUserProfile,
 } from "@toksync/db";
 import {
   apiError,
@@ -27,12 +29,41 @@ import {
 export interface ApiAppOptions {
   repo?: TokSyncRepository;
   devAuth?: boolean;
+  sessionSecret?: string;
+  githubOAuth?: Partial<GitHubOAuthConfig>;
+}
+
+interface GitHubOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userUrl: string;
+  emailsUrl: string;
+  fetch: typeof fetch;
+}
+
+interface GitHubUserResponse {
+  id: number | string;
+  login: string;
+  name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
+}
+
+interface GitHubEmailResponse {
+  email: string;
+  primary?: boolean;
+  verified?: boolean;
 }
 
 export function createApiApp(options: ApiAppOptions = {}) {
   const app = new Hono();
   const repo = options.repo ?? new TokSyncRepository();
   const devAuth = resolveDevAuth(options.devAuth);
+  const sessionSecret = resolveSessionSecret(options.sessionSecret);
+  const githubOAuth = resolveGitHubOAuth(options.githubOAuth);
 
   app.use(
     "*",
@@ -48,8 +79,80 @@ export function createApiApp(options: ApiAppOptions = {}) {
     c.json({ status: "ok", service: "api", timestamp: Date.now() }),
   );
 
+  app.get("/v1/auth/github/start", (c) => {
+    if (!githubOAuth)
+      return c.json(
+        apiError(
+          "not_configured",
+          "GitHub OAuth is not configured for this deployment",
+        ),
+        503,
+      );
+    const state = randomBytes(24).toString("base64url");
+    const authorizeUrl = new URL(githubOAuth.authorizeUrl);
+    authorizeUrl.searchParams.set("client_id", githubOAuth.clientId);
+    authorizeUrl.searchParams.set("redirect_uri", githubOAuth.redirectUri);
+    authorizeUrl.searchParams.set("scope", "read:user user:email");
+    authorizeUrl.searchParams.set("state", state);
+    c.header("Set-Cookie", oauthStateCookie(state, c.req.url));
+    return c.redirect(authorizeUrl.toString(), 302);
+  });
+
+  app.get("/v1/auth/github/callback", async (c) => {
+    if (!githubOAuth)
+      return c.json(
+        apiError(
+          "not_configured",
+          "GitHub OAuth is not configured for this deployment",
+        ),
+        503,
+      );
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    if (
+      !code ||
+      !state ||
+      state !== cookieValue(c.req.raw, OAUTH_STATE_COOKIE)
+    ) {
+      return c.json(
+        apiError("invalid_oauth_state", "Invalid OAuth state"),
+        400,
+      );
+    }
+
+    const token = await exchangeGitHubCode(githubOAuth, code);
+    if (!token) {
+      return c.json(
+        apiError("oauth_exchange_failed", "GitHub OAuth token exchange failed"),
+        502,
+      );
+    }
+    const profile = await fetchGitHubProfile(githubOAuth, token);
+    if (!profile) {
+      return c.json(
+        apiError("oauth_profile_failed", "GitHub profile fetch failed"),
+        502,
+      );
+    }
+
+    const user = repo.ensureGitHubUser(profile);
+    c.header(
+      "Set-Cookie",
+      sessionCookie(user.username, sessionSecret, c.req.url),
+    );
+    c.header("Set-Cookie", clearCookie(OAUTH_STATE_COOKIE, c.req.url), {
+      append: true,
+    });
+    return c.redirect(process.env.GITHUB_OAUTH_SUCCESS_REDIRECT || "/app", 302);
+  });
+
+  app.post("/v1/auth/logout", (c) => {
+    c.header("Set-Cookie", clearCookie(SESSION_COOKIE, c.req.url));
+    return c.json({ status: "logged_out" });
+  });
+
   app.get("/v1/auth/session", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json(repo.authSession(username));
@@ -76,7 +179,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
     const username =
       devAuth && typeof body.username === "string"
         ? body.username
-        : userFromRequest(c.req.raw, devAuth);
+        : userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.authorizeDeviceCode(userCode, username);
@@ -132,7 +235,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   );
 
   app.get("/v1/dashboard/summary", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const summary = repo.dashboardSummary(username, filtersFromUrl(c.req.url));
@@ -141,7 +244,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/dashboard/usage-daily", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const days = repo.usageDaily(username, filtersFromUrl(c.req.url));
@@ -150,7 +253,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/dashboard/breakdowns", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const summary = repo.dashboardSummary(username, filtersFromUrl(c.req.url));
@@ -164,21 +267,21 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/sync-runs", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ runs: repo.listSyncRuns(username) });
   });
 
   app.get("/v1/sync/receipts", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ receipts: repo.listSyncReceipts(username) });
   });
 
   app.get("/v1/sync/receipts/:id", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const receipt = repo.getSyncReceipt(username, c.req.param("id"));
@@ -188,14 +291,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/source-health", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ sources: repo.sourceHealth(username) });
   });
 
   app.get("/v1/cost-guardrails", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const guardrails = repo.listCostGuardrails(username);
@@ -205,7 +308,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.post("/v1/cost-guardrails", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const body = await c.req.json().catch(() => null);
@@ -230,14 +333,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/merge/issues", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ issues: repo.mergeIssues(username) });
   });
 
   app.post("/v1/merge/issues/:id/resolve", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const body = await c.req.json().catch(() => null);
@@ -262,7 +365,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/exports", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const format = c.req.query("format") === "csv" ? "csv" : "json";
@@ -289,14 +392,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/devices", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ devices: repo.listDevices(username) });
   });
 
   app.delete("/v1/devices/:id/data", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.deleteDeviceData(username, c.req.param("id"));
@@ -305,7 +408,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.post("/v1/devices/:id/revoke", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.revokeDevice(username, c.req.param("id"));
@@ -314,14 +417,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/settings/tokens", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json({ tokens: repo.listUserApiTokens(username) });
   });
 
   app.post("/v1/settings/tokens", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const body = await c.req.json().catch(() => null);
@@ -339,7 +442,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.delete("/v1/settings/tokens/:id", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.revokeUserApiToken(username, c.req.param("id"));
@@ -348,7 +451,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.delete("/v1/settings/submitted-data", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.deleteSubmittedData(username);
@@ -368,14 +471,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
         ),
         400,
       );
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     return c.json(repo.setPublicProfile(username, parsed.data));
   });
 
   app.get("/v1/public-profile", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const user = repo.getUser(username) ?? repo.seedDevelopmentUser(username);
@@ -385,13 +488,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
       showCost: user.showCost,
       showSourceBreakdown: user.showSourceBreakdown,
       showModelBreakdown: user.showModelBreakdown,
+      showWorkspaceBreakdown: user.showWorkspaceBreakdown,
       leaderboardOptIn: publicStats?.leaderboardOptIn ?? false,
       url: `${process.env.APP_URL || "http://localhost:3000"}/u/${user.username}`,
     });
   });
 
   app.post("/v1/leaderboard/opt-in", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth);
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const body = await c.req.json().catch(() => null);
@@ -464,6 +568,16 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/leaderboard", (c) => {
+    const unsupported = unsupportedLeaderboardParam(c.req.url);
+    if (unsupported) {
+      return c.json(
+        apiError(
+          "unsupported_query",
+          `Leaderboard is global-only; '${unsupported}' is not supported`,
+        ),
+        400,
+      );
+    }
     const limit = parsePositiveInt(c.req.query("limit"));
     return c.json(
       repo.listLeaderboard({
@@ -477,9 +591,29 @@ export function createApiApp(options: ApiAppOptions = {}) {
   return app;
 }
 
+const SESSION_COOKIE = "toksync_session";
+const OAUTH_STATE_COOKIE = "toksync_oauth_state";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const OAUTH_STATE_MAX_AGE_SECONDS = 60 * 10;
+const DEV_SESSION_SECRET = "dev-session-secret-change-me";
+
 function bearerToken(request: Request) {
   const auth = request.headers.get("authorization");
   return auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+}
+
+function resolveSessionSecret(explicit: string | undefined) {
+  const value =
+    explicit ||
+    process.env.AUTH_SESSION_SECRET ||
+    process.env.TOKEN_HASH_SECRET;
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "AUTH_SESSION_SECRET or TOKEN_HASH_SECRET must be set before starting TokSync in production",
+    );
+  }
+  return DEV_SESSION_SECRET;
 }
 
 function resolveDevAuth(explicit: boolean | undefined) {
@@ -489,13 +623,217 @@ function resolveDevAuth(explicit: boolean | undefined) {
   return process.env.NODE_ENV !== "production";
 }
 
-function userFromRequest(request: Request, devAuth: boolean) {
-  if (!devAuth) return null;
-  const header =
-    request.headers.get("x-toksync-user") ||
-    process.env.TOKSYNC_DEV_USER ||
-    "demo";
-  return isValidUsername(header) ? header : "demo";
+function resolveGitHubOAuth(
+  overrides: Partial<GitHubOAuthConfig> | undefined,
+): GitHubOAuthConfig | null {
+  const clientId = overrides?.clientId ?? process.env.GITHUB_CLIENT_ID;
+  const clientSecret =
+    overrides?.clientSecret ?? process.env.GITHUB_CLIENT_SECRET;
+  const redirectUri =
+    overrides?.redirectUri ??
+    process.env.GITHUB_REDIRECT_URI ??
+    process.env.NEXT_PUBLIC_GITHUB_REDIRECT_URI;
+  if (!clientId || !clientSecret || !redirectUri) return null;
+  return {
+    clientId,
+    clientSecret,
+    redirectUri,
+    authorizeUrl:
+      overrides?.authorizeUrl ?? "https://github.com/login/oauth/authorize",
+    tokenUrl:
+      overrides?.tokenUrl ?? "https://github.com/login/oauth/access_token",
+    userUrl: overrides?.userUrl ?? "https://api.github.com/user",
+    emailsUrl: overrides?.emailsUrl ?? "https://api.github.com/user/emails",
+    fetch: overrides?.fetch ?? fetch,
+  };
+}
+
+async function exchangeGitHubCode(
+  config: GitHubOAuthConfig,
+  code: string,
+): Promise<string | null> {
+  const body = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    code,
+    redirect_uri: config.redirectUri,
+  });
+  const response = await config.fetch(config.tokenUrl, {
+    method: "POST",
+    body,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json().catch(() => null)) as {
+    access_token?: string;
+  } | null;
+  return typeof payload?.access_token === "string"
+    ? payload.access_token
+    : null;
+}
+
+async function fetchGitHubProfile(
+  config: GitHubOAuthConfig,
+  token: string,
+): Promise<GitHubUserProfile | null> {
+  const userResponse = await config.fetch(config.userUrl, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!userResponse.ok) return null;
+  const user = (await userResponse
+    .json()
+    .catch(() => null)) as GitHubUserResponse | null;
+  if (!user || !user.id || !user.login) return null;
+
+  const profile: GitHubUserProfile = {
+    githubId: String(user.id),
+    username: user.login,
+  };
+  const displayName = user.name || user.login;
+  const email = user.email || (await fetchGitHubPrimaryEmail(config, token));
+  if (displayName) profile.displayName = displayName;
+  if (user.avatar_url) profile.avatarUrl = user.avatar_url;
+  if (email) profile.email = email;
+  return profile;
+}
+
+async function fetchGitHubPrimaryEmail(
+  config: GitHubOAuthConfig,
+  token: string,
+) {
+  const response = await config.fetch(config.emailsUrl, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) return undefined;
+  const emails = (await response
+    .json()
+    .catch(() => [])) as GitHubEmailResponse[];
+  return emails.find((email) => email.primary && email.verified)?.email;
+}
+
+function userFromRequest(
+  request: Request,
+  devAuth: boolean,
+  sessionSecret: string,
+) {
+  if (devAuth) {
+    const header =
+      request.headers.get("x-toksync-user") ||
+      process.env.TOKSYNC_DEV_USER ||
+      "demo";
+    return isValidUsername(header) ? header : "demo";
+  }
+  return usernameFromSessionCookie(request, sessionSecret);
+}
+
+function sessionCookie(username: string, secret: string, requestUrl: string) {
+  return serializeCookie(SESSION_COOKIE, signSession(username, secret), {
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    requestUrl,
+  });
+}
+
+function oauthStateCookie(state: string, requestUrl: string) {
+  return serializeCookie(OAUTH_STATE_COOKIE, state, {
+    maxAge: OAUTH_STATE_MAX_AGE_SECONDS,
+    requestUrl,
+  });
+}
+
+function clearCookie(name: string, requestUrl: string) {
+  return serializeCookie(name, "", { maxAge: 0, requestUrl });
+}
+
+function signSession(username: string, secret: string) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      username,
+      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
+    }),
+  ).toString("base64url");
+  const signature = createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function usernameFromSessionCookie(request: Request, secret: string) {
+  const token = cookieValue(request, SESSION_COOKIE);
+  if (!token) return null;
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const expected = createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64url");
+  if (!safeEqual(signature, expected)) return null;
+  let session: { username?: unknown; exp?: unknown };
+  try {
+    session = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    ) as {
+      username?: unknown;
+      exp?: unknown;
+    };
+  } catch {
+    return null;
+  }
+  if (typeof session.exp !== "number" || session.exp < Date.now() / 1000) {
+    return null;
+  }
+  return typeof session.username === "string" &&
+    isValidUsername(session.username)
+    ? session.username
+    : null;
+}
+
+function safeEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+function cookieValue(request: Request, name: string) {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return null;
+  for (const part of cookie.split(";")) {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (rawKey === name) return decodeURIComponent(rawValue.join("="));
+  }
+  return null;
+}
+
+function serializeCookie(
+  name: string,
+  value: string,
+  options: { maxAge: number; requestUrl: string },
+) {
+  const secure =
+    process.env.NODE_ENV === "production" ||
+    new URL(options.requestUrl).protocol === "https:";
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${options.maxAge}`,
+    secure ? "Secure" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 function filtersFromUrl(url: string): DashboardFilters {
@@ -528,9 +866,11 @@ function publicStatsToEmbed(
     activeDays: stats.activeDays,
     topSources: stats.showSourceBreakdown ? stats.topSources : [],
     topModels: stats.showModelBreakdown ? stats.topModels : [],
+    topWorkspaces: stats.showWorkspaceBreakdown ? stats.topWorkspaces : [],
     showCost: stats.showCost,
     showSourceBreakdown: stats.showSourceBreakdown,
     showModelBreakdown: stats.showModelBreakdown,
+    showWorkspaceBreakdown: stats.showWorkspaceBreakdown,
   };
   if (stats.displayName) embedStats.displayName = stats.displayName;
   if (stats.lastSyncAt) embedStats.lastSyncAt = stats.lastSyncAt;
@@ -556,6 +896,14 @@ function parseLeaderboardMetric(value: string | undefined) {
 function parseLeaderboardPeriod(value: string | undefined) {
   if (value === "weekly" || value === "monthly") return value;
   return "all_time" as const;
+}
+
+function unsupportedLeaderboardParam(url: string) {
+  const params = new URL(url).searchParams;
+  for (const name of ["source", "model", "modelId", "cursor"]) {
+    if (params.has(name)) return name;
+  }
+  return null;
 }
 
 function parsePositiveInt(value: string | undefined) {

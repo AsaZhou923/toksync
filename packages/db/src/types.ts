@@ -17,6 +17,7 @@ export interface UserRecord {
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -182,6 +183,7 @@ export interface ProfileStatsRecord {
   activeDays: number;
   topSources: BreakdownRow[];
   topModels: BreakdownRow[];
+  topWorkspaces: BreakdownRow[];
   dateStart?: string;
   dateEnd?: string;
   lastSyncAt?: string;
@@ -195,6 +197,7 @@ export interface PublicProfileStatsRecord extends ProfileStatsRecord {
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown: boolean;
   dailyPublic: Array<{ date: string; tokens: number; costUsd: number }>;
   leaderboardOptIn: boolean;
 }

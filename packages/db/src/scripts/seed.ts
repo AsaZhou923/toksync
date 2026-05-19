@@ -7,5 +7,6 @@ repo.setPublicProfile(user.username, {
   showCost: true,
   showSourceBreakdown: false,
   showModelBreakdown: false,
+  showWorkspaceBreakdown: false,
 });
 console.log(`Seeded TokSync user ${user.username}`);

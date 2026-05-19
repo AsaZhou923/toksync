@@ -37,17 +37,23 @@ The product direction follows Tokscale's strong usage/profile/README embed loop,
 but TokSync's default path is private multi-device aggregation. Public profile,
 README badge/card, and leaderboard remain explicit opt-in layers.
 
+Product defaults are hosted-first and privacy-first: initial production
+deployment targets a hosted SaaS, while the repo keeps env, migration, and
+export boundaries compatible with later self-hosting. Production login starts
+with GitHub OAuth; email magic link is deferred. Leaderboard scope is global
+only, with no source/model subboards.
+
 ## Current Console
 
-| Surface            | Current behavior                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                         |
-| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures                          |
-| API                | Device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard         |
-| Public output      | README badge/profile-card SVG from public aggregate cache only                          |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                          |
+| Surface            | Current behavior                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                       |
+| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures                                        |
+| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                              |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard                       |
+| Public output      | README badge/profile-card SVG from public aggregate cache only                                        |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                        |
 
 ## Quick Start
 
@@ -73,8 +79,8 @@ same events instead of double-counting totals.
 Headless/private sync can use a user API token created from settings or the API:
 
 ```bash
-pnpm agent login --token tsu_...
-TOKSYNC_API_TOKEN=tsu_... pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+pnpm agent login --token tsk_...
+TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
 ```
 
 Default local services:
@@ -117,13 +123,15 @@ for the hosted Postgres target.
 - README badge/profile-card endpoints read public aggregate state only.
 - Public output must not expose device names, raw paths, workspace hashes,
   source session ids, message ids, message text, tool arguments, or tool output.
+- Workspace/project labels are private by default and may appear in public
+  output only after an explicit user allow decision.
 - Device fingerprinting must not derive from hardware identifiers, hostname,
   username, home path, or project path.
 - Cost is approximate usage estimation, not provider billing truth.
 - Cost Guardrails are private-only and never feed public profile, README SVG, or
   leaderboard output.
 - Leaderboard participation requires public profile plus a second explicit
-  opt-in and reads public aggregate cache only.
+  opt-in, reads public aggregate cache only, and is global-only.
 - Content sync, search, eval export, vault, and proof-pack workflows are future
   opt-in features, not current behavior.
 
@@ -133,17 +141,19 @@ The external specs track Tokscale parity and TokSync-specific governance
 features. The v0.2 private governance slice is implemented locally, and v0.3
 adds the first cost-governance and public leaderboard cut:
 
-| Phase | Planned capability   | Boundary                                                      |
-| ----- | -------------------- | ------------------------------------------------------------- |
-| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                |
-| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                 |
-| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                  |
-| v0.2  | User API token       | Implemented for private/headless metrics sync                 |
-| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                      |
-| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts |
-| v0.3  | Leaderboard          | Implemented as public-profile + opt-in, public cache only     |
-| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore                          |
-| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates                  |
+| Phase | Planned capability   | Boundary                                                                                      |
+| ----- | -------------------- | --------------------------------------------------------------------------------------------- |
+| v0.1  | Public label privacy | Implemented as private-by-default labels with explicit public toggle and safe-label filtering |
+| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                                                |
+| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                                                 |
+| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                                                  |
+| v0.2  | GitHub OAuth         | Implemented as first production browser login; email magic link deferred                      |
+| v0.2  | User API token       | Implemented for private/headless metrics sync                                                 |
+| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                      |
+| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                 |
+| v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                           |
+| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore                                                          |
+| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates                                                  |
 
 Billing, subscriptions, payment providers, plan limits, billing UI, content
 sync, search, eval export, and Private Usage Vault remain out of scope.

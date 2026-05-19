@@ -8,10 +8,12 @@ export interface PublicEmbedStats {
   activeDays: number;
   topSources: Array<{ key: string; tokens: number; costUsd: number }>;
   topModels: Array<{ key: string; tokens: number; costUsd: number }>;
+  topWorkspaces?: Array<{ key: string; tokens: number; costUsd: number }>;
   lastSyncAt?: string;
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown?: boolean;
 }
 
 export interface BadgeOptions {

@@ -10,6 +10,7 @@ create table if not exists users (
   show_cost boolean not null default false,
   show_source_breakdown boolean not null default false,
   show_model_breakdown boolean not null default false,
+  show_workspace_breakdown boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -148,6 +149,7 @@ create table if not exists profile_stats (
   active_days integer not null,
   top_sources jsonb not null,
   top_models jsonb not null,
+  top_workspaces jsonb not null,
   date_start date,
   date_end date,
   last_sync_at timestamptz,
@@ -164,12 +166,14 @@ create table if not exists public_profile_stats (
   active_days integer not null,
   top_sources jsonb not null,
   top_models jsonb not null,
+  top_workspaces jsonb not null,
   date_start date,
   date_end date,
   last_sync_at timestamptz,
   show_cost boolean not null default false,
   show_source_breakdown boolean not null default false,
   show_model_breakdown boolean not null default false,
+  show_workspace_breakdown boolean not null default false,
   daily_public jsonb,
   leaderboard_opt_in boolean not null default false,
   updated_at timestamptz not null default now()

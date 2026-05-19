@@ -10,6 +10,7 @@ export interface PublicProfileState {
   showCost: boolean;
   showSourceBreakdown: boolean;
   showModelBreakdown: boolean;
+  showWorkspaceBreakdown: boolean;
 }
 
 export function PublicProfileForm({
@@ -91,6 +92,16 @@ export function PublicProfileForm({
           checked={state.showModelBreakdown}
           onChange={(event) =>
             update("showModelBreakdown", event.target.checked)
+          }
+        />
+      </label>
+      <label className="switch-line">
+        <span>Show project labels</span>
+        <input
+          type="checkbox"
+          checked={state.showWorkspaceBreakdown}
+          onChange={(event) =>
+            update("showWorkspaceBreakdown", event.target.checked)
           }
         />
       </label>

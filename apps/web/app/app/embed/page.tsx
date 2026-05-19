@@ -16,6 +16,7 @@ export default async function EmbedPage() {
     showCost: false,
     showSourceBreakdown: false,
     showModelBreakdown: false,
+    showWorkspaceBreakdown: false,
   };
   const username = USER;
   const encodedUsername = encodeURIComponent(username);

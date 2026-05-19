@@ -5,6 +5,11 @@ export type ApiErrorCode =
   | "not_found"
   | "device_revoked"
   | "feature_not_enabled"
+  | "not_configured"
+  | "invalid_oauth_state"
+  | "oauth_exchange_failed"
+  | "oauth_profile_failed"
+  | "unsupported_query"
   | "expired_code"
   | "consumed_code"
   | "rate_limited";

@@ -39,6 +39,7 @@ export default async function ExportsPage() {
         showCost: publicProfile?.showCost ?? false,
         showSourceBreakdown: publicProfile?.showSourceBreakdown ?? false,
         showModelBreakdown: publicProfile?.showModelBreakdown ?? false,
+        showWorkspaceBreakdown: publicProfile?.showWorkspaceBreakdown ?? false,
       },
       latestRun: latestRun
         ? {

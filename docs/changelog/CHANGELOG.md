@@ -2,6 +2,101 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-19-hosted-auth-public-boundary-alignment"></a>
+
+## 2026-05-19 - hosted auth public boundary alignment
+
+日期：2026-05-19
+
+本次更新把 2026-05-19 外部 specs 中已经收口的产品决策落到仓库实现：生产登录走 GitHub OAuth browser session，user API token 前缀回到文档约定的 `tsk_`，公开 workspace/project label 只有显式开启后才展示，并且 leaderboard 保持 global-only、public-cache-only 的边界。
+
+## 概览
+
+- 增加 GitHub OAuth start/callback/logout/session cookie 路径，生产态不再依赖开发用 `X-TokSync-User` header。
+- 将 user API token 创建、鉴权、测试和 README 示例统一为 `tsk_` 前缀，匹配 auth spec。
+- 增加 public profile 的 `showWorkspaceBreakdown` 开关、公开安全 label 聚合和存储 hydration，默认不公开 project/workspace label。
+- 明确 leaderboard 第一版只做全局榜，对 `source`、`model`、`modelId`、`cursor` 查询参数返回 `400 unsupported_query`。
+- 同步 README 中的 hosted-first、GitHub OAuth、global-only leaderboard、公开 label 隐私边界。
+
+## 用户可见变化
+
+- Login 页面提供 “Continue with GitHub” 入口，同时保留开发态 demo 入口。
+- Settings/public profile 表单新增 “Show project labels” 开关；公开 profile 页面只有开关开启时才展示安全项目 label breakdown。
+- Dashboard、Embed、Exports、Leaderboard 页面同步识别 `showWorkspaceBreakdown`，避免老数据或 API 降级时缺字段。
+- README/中文 README 的 headless sync 示例改为 `tsk_` token。
+
+## API / Storage
+
+- `GET /v1/auth/github/start`、`GET /v1/auth/github/callback`、`POST /v1/auth/logout` 和 `GET /v1/auth/session` 形成 GitHub OAuth session 路径；OAuth state 和 session cookie 使用 HMAC 签名校验。
+- `createApiApp` 支持显式 `sessionSecret` 和 GitHub OAuth 配置，生产态要求配置 session secret。
+- 私有 API 在 `devAuth: false` 时读取 session cookie，不再信任开发 header。
+- `users`、`profile_stats`、`public_profile_stats` 和对应 TypeScript 类型增加 workspace breakdown 字段；file store hydration 为旧数据补默认值。
+- user API token 创建和鉴权统一使用 `tsk_` 前缀，旧 `tsu_` 不再作为当前契约接受。
+
+## Web / Embed
+
+- Public profile settings、公开 profile 页面和 embed/dashboard 相关类型新增 `showWorkspaceBreakdown`。
+- Embed renderer 的 public stats 类型增加 `topWorkspaces` 和 `showWorkspaceBreakdown`，供公开 profile/card 数据边界使用。
+- Login 页面文案改为 hosted GitHub OAuth first，demo 仅作为开发路径。
+
+## Privacy / Public Data
+
+- Workspace/project label 默认私有；即使开启公开开关，也只展示经过清洗、且不含 path separator 或 drive separator 的安全 label。
+- Public profile 默认返回空 `topWorkspaces`；开启 `showWorkspaceBreakdown` 后也不会返回 workspace hash 或 raw path。
+- Leaderboard 仍不展示 device id、workspace label/hash、source session id 或 source message id，并拒绝 source/model 分榜和 cursor 查询。
+- Billing、content sync、Private Usage Vault、source/model leaderboard 分榜和 cursor 分页仍未进入当前实现。
+
+## 文档同步
+
+- `README.md` 和 `README.zh-CN.md` 同步 hosted-first、GitHub OAuth、`tsk_` token、global-only leaderboard 和公开 label 边界。
+- `docs/changelog/CHANGELOG.md` 修正历史 v0.2 条目中的 user API token 示例前缀。
+- 外部 TokSync specs 已包含 2026-05-19 产品决策和相关 API/data-shape 说明；本次 workflow 继续同步 Update Logs 镜像。
+
+## 影响文件
+
+### Apps
+
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/web/app/login/page.tsx`
+- `apps/web/app/app/page.tsx`
+- `apps/web/app/app/embed/page.tsx`
+- `apps/web/app/app/exports/page.tsx`
+- `apps/web/app/app/settings/page.tsx`
+- `apps/web/app/app/leaderboard/page.tsx`
+- `apps/web/app/u/[username]/page.tsx`
+- `apps/web/components/PublicProfileForm.tsx`
+- `apps/web/lib/api.ts`
+
+### Packages
+
+- `packages/shared/src/errors.ts`
+- `packages/shared/src/schemas.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/db/src/schema.ts`
+- `packages/db/src/store.ts`
+- `packages/db/src/types.ts`
+- `packages/db/src/scripts/seed.ts`
+- `packages/db/migrations/0001_v0_1_metrics.sql`
+- `packages/embed-renderer/src/index.ts`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+
+## 验证
+
+- 已通过：`pnpm test -- apps/api/src/app.test.ts packages/db/src/repository.test.ts`
+- 已通过：`pnpm format:check`
+- 已通过：`pnpm test:full`
+- 已通过：`pnpm exec prettier --check docs/changelog/CHANGELOG.md docs/changelog/CHANGELOG_WORKFLOW.md`
+- 已通过：外部 Update Logs 镜像 SHA256 parity
+- 已通过：`rg -n "docs/changelog/update-log|update-log-[0-9]{4}|CHANGELOG.md#" . -g "!docs/changelog/CHANGELOG_WORKFLOW.md" -g "!docs/changelog/CHANGELOG.md"` 无残留匹配
+- 已通过：`git diff --check`
+
 <a id="2026-05-18-v0-3-cost-guardrails-leaderboard"></a>
 
 ## 2026-05-18 - v0.3 cost guardrails leaderboard
@@ -121,7 +216,7 @@ TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs �
 
 ## Agent / Collector
 
-- `apps/agent` 支持 `pnpm agent login --token tsu_...`，并在 sync 时优先使用 `TOKSYNC_API_TOKEN` 做 headless/private metrics 写入。
+- `apps/agent` 支持 `pnpm agent login --token tsk_...`，并在 sync 时优先使用 `TOKSYNC_API_TOKEN` 做 headless/private metrics 写入。
 - dry-run 输出增加 receipt digest 和 excluded field categories，用来证明本地 payload 仍在 metrics-only 边界内。
 - collector 增加读取日志、source discovery 测试、unsafe JSON key 拒绝和更严格的 source path segment 推断。
 - workspace label 清洗统一复用 `packages/privacy`，避免 collector 自行维护一套规则。
