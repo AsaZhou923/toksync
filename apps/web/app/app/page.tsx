@@ -159,6 +159,10 @@ export default async function AppDashboardPage() {
             <ExternalLink size={16} />
             README embed
           </a>
+          <a className="btn" href="/app/proof-pack">
+            <ExternalLink size={16} />
+            Proof Pack
+          </a>
         </div>
       </header>
       <section className="grid grid-4">
@@ -315,6 +319,14 @@ export default async function AppDashboardPage() {
               {Array.from({ length: 21 }).map((_, index) => (
                 <span key={index} />
               ))}
+            </div>
+            <div className="toolbar" style={{ marginTop: 14 }}>
+              <a className="btn" href="/app/proof-pack">
+                Proof Pack
+              </a>
+              <a className="btn" href="/app/wrapped">
+                Wrapped
+              </a>
             </div>
           </div>
         </div>

@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img alt="stage" src="https://img.shields.io/badge/stage-v0.4-0f7b59?style=flat-square" />
+  <img alt="stage" src="https://img.shields.io/badge/stage-v0.5-0f7b59?style=flat-square" />
   <img alt="payload" src="https://img.shields.io/badge/payload-metrics--only-315fbd?style=flat-square" />
   <img alt="public data" src="https://img.shields.io/badge/public%20data-opt--in-b66f09?style=flat-square" />
   <img alt="package manager" src="https://img.shields.io/badge/pnpm-9.15.9-f69220?style=flat-square" />
@@ -30,7 +30,7 @@
 
 ## What TokSync Is
 
-TokSync v0.4 is a local-first telemetry hub for AI coding tools. It aggregates
+TokSync v0.5 is a local-first telemetry hub for AI coding tools. It aggregates
 token counts, approximate cost, model, source, device, and workspace-label usage
 across machines while keeping private content out of the sync payload.
 
@@ -46,15 +46,15 @@ only, with no source/model subboards.
 
 ## Current Console
 
-| Surface            | Current behavior                                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                                     |
-| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs |
-| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault        |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                            |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, CSP/security headers  |
-| Public output      | README badge/profile-card SVG from public aggregate cache only                                                      |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                      |
+| Surface            | Current behavior                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                                                         |
+| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs                     |
+| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault, Proof Pack, Wrapped       |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                                                |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, Proof Pack, Wrapped, CSP/security headers |
+| Public output      | README badge/profile-card SVG, Public Proof Pack, and public Wrapped card from public cache / receipt digest only                       |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                                          |
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ private object directory with `TOKSYNC_VAULT_ARTIFACT_DIR`.
 ## Privacy Contract
 
 - Public profile is disabled by default.
-- README badge/profile-card endpoints read public aggregate state only.
+- README badge/profile-card, Public Proof Pack, and public Wrapped endpoints read public aggregate state or receipt digest only.
 - Public output must not expose device names, raw paths, workspace hashes,
   source session ids, message ids, message text, tool arguments, or tool output.
 - Workspace/project labels are private by default and may appear in public
@@ -139,15 +139,17 @@ private object directory with `TOKSYNC_VAULT_ARTIFACT_DIR`.
   passphrase of at least 16 characters; new exports record explicit scrypt
   parameters and can be downloaded/imported across instances with idempotent
   duplicate handling.
-- Content sync, search, eval export, and proof-pack workflows are future opt-in
-  features, not current behavior.
+- Content sync, search, and eval export remain future opt-in features, not
+  current behavior.
 
 ## Roadmap Boundaries
 
 The external specs track Tokscale parity and TokSync-specific governance
 features. The v0.2 private governance slice is implemented locally, v0.3 adds
-the first cost-governance and public leaderboard cut, and v0.4 adds a portable
-metrics vault plus real-format source parity adapters:
+the first cost-governance and public leaderboard cut, v0.4 adds a portable
+metrics vault plus real-format source parity adapters, and v0.5 turns Public
+Proof Pack / Wrapped into visible app surfaces backed by public-safe API
+contracts:
 
 | Phase | Planned capability   | Boundary                                                                                      |
 | ----- | -------------------- | --------------------------------------------------------------------------------------------- |
@@ -162,11 +164,13 @@ metrics vault plus real-format source parity adapters:
 | v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                           |
 | v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing  |
 | v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import        |
-| v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates                                                  |
+| v0.4+ | Stabilization gate   | FileStore contract tests, parser coverage, lock contention, vault-version regression coverage |
+| v0.5  | Public Proof Pack    | Implemented API and `/app/proof-pack` console from public aggregates plus receipt digests     |
+| v0.5  | Wrapped              | Implemented `/app/wrapped`, private summary, and public low-sensitivity Wrapped card          |
 
 Billing, subscriptions, payment providers, plan limits, billing UI, content
-sync, search, eval export, proof pack, and source/model leaderboard subboards
-remain out of scope.
+sync, search, eval export, and source/model leaderboard subboards remain out of
+scope.
 
 ## Useful Commands
 

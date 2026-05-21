@@ -1,3 +1,5 @@
+import { headers as requestHeaders } from "next/headers";
+
 const API_URL =
   process.env.API_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -202,6 +204,90 @@ export interface PublicProfileResponse {
   profile: PublicProfileStats | null;
 }
 
+export interface WrappedSummary {
+  schemaVersion: number;
+  visibility: "private" | "public";
+  username: string;
+  generatedAt: string;
+  publicFields?: string[];
+  excludedFields?: string[];
+  totals: {
+    tokens?: number;
+    totalTokens?: number;
+    costUsd?: number;
+    totalCostUsd?: number;
+    activeDays: number;
+    messages?: number;
+    turns?: number;
+  };
+  highlights: {
+    topSource?: BreakdownRow | null;
+    topModel?: BreakdownRow | null;
+    busiestDay?: {
+      date: string;
+      tokens: number;
+      costUsd?: number;
+    } | null;
+  };
+  publicShareAvailable?: boolean;
+}
+
+export interface WrappedResponse {
+  enabled?: boolean;
+  username?: string;
+  wrapped: WrappedSummary | null;
+}
+
+export interface PublicProofPack {
+  schemaVersion: number;
+  proofType: "public-proof-pack";
+  username: string;
+  generatedAt: string;
+  publicFields: string[];
+  excludedFields: string[];
+  summary: {
+    totals: {
+      totalTokens: number;
+      activeDays: number;
+      totalCostUsd?: number;
+    };
+    dateRange?: {
+      dateStart?: string;
+      dateEnd?: string;
+      lastSyncAt?: string;
+    };
+    dailyPublic?: Array<{ date: string; tokens: number; costUsd?: number }>;
+    topSources?: BreakdownRow[];
+    topModels?: BreakdownRow[];
+    topWorkspaces?: BreakdownRow[];
+    controls?: {
+      showCost: boolean;
+      showSourceBreakdown: boolean;
+      showModelBreakdown: boolean;
+      showWorkspaceBreakdown: boolean;
+    };
+  };
+  receiptCount: number;
+  receiptDigests: Array<{
+    payloadDigest: string;
+    status: string;
+    resultSummary: {
+      inserted: number;
+      updated: number;
+      skipped: number;
+      errors: number;
+    };
+    createdAt: string;
+  }>;
+  proofDigest: string;
+}
+
+export interface PublicProofResponse {
+  enabled: boolean;
+  username: string;
+  proof: PublicProofPack | null;
+}
+
 export interface DeviceRow {
   id: string;
   name: string;
@@ -286,13 +372,24 @@ export interface HealthResponse {
   timestamp: number;
 }
 
+export interface AuthSessionResponse {
+  user: {
+    id: string;
+    username: string;
+    displayName?: string;
+    avatarUrl?: string;
+    email?: string;
+    authProvider: string;
+  };
+}
+
 export async function apiGet<T>(
   path: string,
   options: { notFoundAsNull?: boolean } = {},
 ): Promise<T | null> {
   const response = await fetch(`${API_URL}${path}`, {
     cache: "no-store",
-    headers: { "X-TokSync-User": USER },
+    headers: await apiRequestHeaders(),
   });
   if (response.status === 404 && options.notFoundAsNull !== false) {
     return null;
@@ -307,8 +404,27 @@ export async function apiGet<T>(
   return (await response.json()) as T;
 }
 
+export async function currentUsername() {
+  const session = await apiGet<AuthSessionResponse>("/v1/auth/session", {
+    notFoundAsNull: false,
+  });
+  return session?.user.username ?? USER;
+}
+
 export function apiUrl(path: string) {
   return `${API_URL}${path}`;
+}
+
+async function apiRequestHeaders() {
+  const headers = new Headers({ "X-TokSync-User": USER });
+  try {
+    const incoming = await requestHeaders();
+    const cookie = incoming.get("cookie");
+    if (cookie) headers.set("Cookie", cookie);
+  } catch {
+    // Outside a Next request context, dev auth keeps local scripts usable.
+  }
+  return headers;
 }
 
 export { USER };

@@ -1544,12 +1544,107 @@ export class TokSyncRepository {
 
   getPublicStats(username: string) {
     const lower = normalizeUsername(username);
-    return (
-      this.store
-        .read()
-        .publicProfileStats.find((stats) => stats.usernameLower === lower) ??
-      null
-    );
+    const data = this.store.read();
+    const stats =
+      data.publicProfileStats.find((item) => item.usernameLower === lower) ??
+      null;
+    if (!stats) return null;
+    const user = data.users.find((item) => item.id === stats.userId);
+    if (!user?.publicProfileEnabled) return null;
+    return stats;
+  }
+
+  getPublicProofPack(username: string) {
+    const lower = normalizeUsername(username);
+    const data = this.store.read();
+    const stats = this.getPublicStats(lower);
+    if (!stats) return null;
+    const receiptDigests = data.syncReceipts
+      .filter((receipt) => receipt.userId === stats.userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 10)
+      .map((receipt) => ({
+        payloadDigest: receipt.payloadDigest,
+        status: receipt.status,
+        resultSummary: receipt.resultSummary,
+        createdAt: receipt.createdAt,
+      }));
+    const proof = {
+      schemaVersion: 1,
+      proofType: "public-proof-pack" as const,
+      username: stats.usernameLower,
+      generatedAt: new Date().toISOString(),
+      publicFields: publicFieldsForStats(stats),
+      excludedFields: RECEIPT_EXCLUDED_FIELDS,
+      summary: publicSummaryFromStats(stats),
+      receiptCount: data.syncReceipts.filter(
+        (receipt) => receipt.userId === stats.userId,
+      ).length,
+      receiptDigests,
+    };
+    return {
+      ...proof,
+      proofDigest: `sha256:${sha256Base64Url(JSON.stringify(proof))}`,
+    };
+  }
+
+  getPrivateWrapped(username = "demo") {
+    const summary = this.dashboardSummary(username);
+    const daily = this.usageDaily(username);
+    if (!summary || !daily) return null;
+    const busiestDay = [...daily.days].sort(
+      (left, right) => right.tokens - left.tokens,
+    )[0];
+    return {
+      schemaVersion: 1,
+      visibility: "private" as const,
+      username: normalizeUsername(username),
+      generatedAt: new Date().toISOString(),
+      totals: summary.totals,
+      highlights: {
+        topSource: summary.topSources[0] ?? null,
+        topModel: summary.topModels[0] ?? null,
+        busiestDay: busiestDay
+          ? {
+              date: busiestDay.date,
+              tokens: busiestDay.tokens,
+              costUsd: busiestDay.costUsd,
+            }
+          : null,
+      },
+      publicShareAvailable: Boolean(this.getPublicStats(username)),
+    };
+  }
+
+  getPublicWrapped(username: string) {
+    const stats = this.getPublicStats(username);
+    if (!stats) return null;
+    const daily = stats.dailyPublic.map((row) => ({
+      date: row.date,
+      tokens: row.tokens,
+      ...(stats.showCost ? { costUsd: row.costUsd } : {}),
+    }));
+    const busiestDay = [...daily].sort(
+      (left, right) => right.tokens - left.tokens,
+    )[0];
+    return {
+      schemaVersion: 1,
+      visibility: "public" as const,
+      username: stats.usernameLower,
+      generatedAt: new Date().toISOString(),
+      publicFields: publicFieldsForStats(stats),
+      excludedFields: RECEIPT_EXCLUDED_FIELDS,
+      totals: publicSummaryFromStats(stats).totals,
+      highlights: {
+        topSource: stats.showSourceBreakdown
+          ? (publicBreakdown(stats.topSources, stats.showCost)[0] ?? null)
+          : null,
+        topModel: stats.showModelBreakdown
+          ? (publicBreakdown(stats.topModels, stats.showCost)[0] ?? null)
+          : null,
+        busiestDay: busiestDay ?? null,
+      },
+    };
   }
 
   setLeaderboardOptIn(username: string, rawInput: LeaderboardOptInInput) {
@@ -3130,6 +3225,65 @@ function vaultPublicProfileStats(stats: PublicProfileStatsRecord | null) {
     dailyPublic: stats.dailyPublic,
     leaderboardOptIn: stats.leaderboardOptIn,
   };
+}
+
+function publicFieldsForStats(stats: PublicProfileStatsRecord) {
+  return [
+    "username",
+    "totalTokens",
+    "activeDays",
+    "dateRange",
+    "dailyPublic.tokens",
+    ...(stats.showCost ? ["totalCostUsd", "dailyPublic.costUsd"] : []),
+    ...(stats.showSourceBreakdown ? ["topSources"] : []),
+    ...(stats.showModelBreakdown ? ["topModels"] : []),
+    ...(stats.showWorkspaceBreakdown ? ["topWorkspaces"] : []),
+    "receiptDigests.payloadDigest",
+  ];
+}
+
+function publicSummaryFromStats(stats: PublicProfileStatsRecord) {
+  return {
+    totals: {
+      totalTokens: stats.totalTokens,
+      activeDays: stats.activeDays,
+      ...(stats.showCost ? { totalCostUsd: stats.totalCostUsd } : {}),
+    },
+    dateRange: {
+      dateStart: stats.dateStart,
+      dateEnd: stats.dateEnd,
+      lastSyncAt: stats.lastSyncAt,
+    },
+    dailyPublic: stats.dailyPublic.map((row) => ({
+      date: row.date,
+      tokens: row.tokens,
+      ...(stats.showCost ? { costUsd: row.costUsd } : {}),
+    })),
+    topSources: stats.showSourceBreakdown
+      ? publicBreakdown(stats.topSources, stats.showCost)
+      : [],
+    topModels: stats.showModelBreakdown
+      ? publicBreakdown(stats.topModels, stats.showCost)
+      : [],
+    topWorkspaces: stats.showWorkspaceBreakdown
+      ? publicBreakdown(stats.topWorkspaces, stats.showCost)
+      : [],
+    controls: {
+      showCost: stats.showCost,
+      showSourceBreakdown: stats.showSourceBreakdown,
+      showModelBreakdown: stats.showModelBreakdown,
+      showWorkspaceBreakdown: stats.showWorkspaceBreakdown,
+    },
+  };
+}
+
+function publicBreakdown(rows: BreakdownRow[], showCost: boolean) {
+  return rows.map((row) => ({
+    key: row.key,
+    tokens: row.tokens,
+    messages: row.messages,
+    ...(showCost ? { costUsd: row.costUsd } : {}),
+  }));
 }
 
 function vaultBreakdownRow(row: BreakdownRow) {

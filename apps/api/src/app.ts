@@ -645,6 +645,39 @@ export function createApiApp(options: ApiAppOptions = {}) {
     });
   });
 
+  app.get("/v1/public-proof/:username", (c) => {
+    const username = c.req.param("username");
+    if (!isValidUsername(username))
+      return c.json(apiError("invalid_payload", "Invalid username"), 400);
+    const proof = repo.getPublicProofPack(username);
+    return c.json({
+      enabled: Boolean(proof),
+      username: normalizeUsername(username),
+      proof,
+    });
+  });
+
+  app.get("/v1/wrapped", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const wrapped = repo.getPrivateWrapped(username);
+    if (!wrapped) return c.json(apiError("not_found", "User not found"), 404);
+    return c.json({ wrapped });
+  });
+
+  app.get("/v1/wrapped/:username", (c) => {
+    const username = c.req.param("username");
+    if (!isValidUsername(username))
+      return c.json(apiError("invalid_payload", "Invalid username"), 400);
+    const wrapped = repo.getPublicWrapped(username);
+    return c.json({
+      enabled: Boolean(wrapped),
+      username: normalizeUsername(username),
+      wrapped,
+    });
+  });
+
   app.get("/v1/public-profile/:username", (c) => {
     const username = c.req.param("username");
     if (!isValidUsername(username))
@@ -1123,11 +1156,17 @@ function publicStatsToEmbed(
   const embedStats: PublicEmbedStats = {
     username: normalizeUsername(username),
     totalTokens: stats.totalTokens,
-    totalCostUsd: stats.totalCostUsd,
+    totalCostUsd: stats.showCost ? stats.totalCostUsd : 0,
     activeDays: stats.activeDays,
-    topSources: stats.showSourceBreakdown ? stats.topSources : [],
-    topModels: stats.showModelBreakdown ? stats.topModels : [],
-    topWorkspaces: stats.showWorkspaceBreakdown ? stats.topWorkspaces : [],
+    topSources: stats.showSourceBreakdown
+      ? publicBreakdownForEmbed(stats.topSources, stats.showCost)
+      : [],
+    topModels: stats.showModelBreakdown
+      ? publicBreakdownForEmbed(stats.topModels, stats.showCost)
+      : [],
+    topWorkspaces: stats.showWorkspaceBreakdown
+      ? publicBreakdownForEmbed(stats.topWorkspaces, stats.showCost)
+      : [],
     showCost: stats.showCost,
     showSourceBreakdown: stats.showSourceBreakdown,
     showModelBreakdown: stats.showModelBreakdown,
@@ -1136,6 +1175,20 @@ function publicStatsToEmbed(
   if (stats.displayName) embedStats.displayName = stats.displayName;
   if (stats.lastSyncAt) embedStats.lastSyncAt = stats.lastSyncAt;
   return embedStats;
+}
+
+function publicBreakdownForEmbed(
+  rows: NonNullable<
+    ReturnType<TokSyncRepository["getPublicStats"]>
+  >["topSources"],
+  showCost: boolean,
+) {
+  return rows.map((row) => ({
+    key: row.key,
+    tokens: row.tokens,
+    messages: row.messages,
+    costUsd: showCost ? row.costUsd : 0,
+  }));
 }
 
 function parseMetric(value: string | undefined): "tokens" | "cost" | "rank" {

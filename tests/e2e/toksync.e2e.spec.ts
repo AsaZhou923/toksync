@@ -74,13 +74,48 @@ test.describe("TokSync local agent flow", () => {
       `${apiUrl}/v1/badge/demo.svg?metric=tokens`,
     );
     await page.getByRole("checkbox", { name: "Public profile" }).uncheck();
+    await page.getByRole("checkbox", { name: "Show cost" }).uncheck();
+    await page
+      .getByRole("checkbox", { name: "Show source breakdown" })
+      .uncheck();
+    await page
+      .getByRole("checkbox", { name: "Show model breakdown" })
+      .uncheck();
+    await page.getByRole("checkbox", { name: "Show project labels" }).uncheck();
     await expect(page.getByTestId("embed-status")).toContainText("private");
     await expect(page.getByAltText("TokSync badge preview")).toHaveAttribute(
       "src",
-      /preview=1/,
+      /preview=\d+/,
     );
+
+    await page.goto("/app/proof-pack");
+    await expect(
+      page.getByRole("heading", { name: "Public Proof Pack" }),
+    ).toBeVisible();
+    await expect(page.getByText("Proof Pack stays unavailable")).toBeVisible();
+
+    await page.goto("/app/wrapped");
+    await expect(page.getByRole("heading", { name: "Wrapped" })).toBeVisible();
+    await expect(page.getByText("public profile is private")).toBeVisible();
+
+    await page.goto("/app/embed");
     await page.getByRole("checkbox", { name: "Public profile" }).check();
     await expect(page.getByTestId("embed-status")).toContainText("public");
+
+    await page.goto("/app/proof-pack");
+    await expect(
+      page.getByRole("heading", { name: "Public Proof Pack" }),
+    ).toBeVisible();
+    await expect(page.getByText("sha256:").first()).toBeVisible();
+    await expect(page.getByText("totalCostUsd")).toHaveCount(0);
+    await expect(page.getByText("topSources")).toHaveCount(0);
+    await expect(page.getByText("topModels")).toHaveCount(0);
+    await expect(page.getByText("topWorkspaces")).toHaveCount(0);
+
+    await page.goto("/app/wrapped");
+    await expect(page.getByRole("heading", { name: "Wrapped" })).toBeVisible();
+    await expect(page.getByText("2.6K").first()).toBeVisible();
+    await expect(page.getByText("source hidden")).toBeVisible();
 
     await page.goto("/u/demo");
     await expect(page.getByRole("heading", { name: "@demo" })).toBeVisible();

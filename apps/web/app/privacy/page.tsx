@@ -6,7 +6,7 @@ export default function PrivacyPage() {
           <p className="page-kicker">metrics-only by default</p>
           <h1>Privacy</h1>
           <p className="lede">
-            TokSync v0.1 stores token counts, estimated cost, model, source,
+            TokSync v0.5 stores token counts, estimated cost, model, source,
             date, device id, and hashed workspace keys. It does not upload
             prompts, responses, tool arguments, tool output, file content,
             secrets, or raw project paths.
@@ -26,8 +26,8 @@ export default function PrivacyPage() {
           <h2 className="section-title">Public data</h2>
           <p className="muted">
             Public profile, badge, and embed endpoints read public aggregate
-            cache only. Leaderboard and public proof features are planned after
-            v0.1 and must stay opt-in.
+            cache only. Leaderboard, Proof Pack, and Wrapped surfaces are opt-in
+            and never read private raw events.
           </p>
         </div>
       </section>

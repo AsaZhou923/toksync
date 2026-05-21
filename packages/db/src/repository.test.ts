@@ -4,9 +4,12 @@ import {
   randomBytes,
   scryptSync,
 } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { FileTokSyncStore } from "./store";
 import { FileVaultArtifactStore, TokSyncRepository } from "./repository";
@@ -223,6 +226,54 @@ describe("TokSyncRepository", () => {
       updatedAt: "2026-05-17T00:00:00.000Z",
     });
     expect(() => secondStore.write(secondData)).toThrow(/changed on disk/);
+  });
+
+  it("waits for an active FileStore lock held by another process", async () => {
+    const { store, file } = createRepoWithStore();
+    store.reset();
+    const lockPath = `${file}.lock`;
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          const lockPath = ${JSON.stringify(lockPath)};
+          const fd = fs.openSync(lockPath, "wx");
+          fs.writeFileSync(fd, process.pid + "\\n" + new Date().toISOString() + "\\n");
+          setTimeout(() => {
+            fs.closeSync(fd);
+            fs.rmSync(lockPath, { force: true });
+          }, 150);
+          setTimeout(() => process.exit(0), 250);
+        `,
+      ],
+      { stdio: "ignore" },
+    );
+    await waitForFile(lockPath);
+
+    const data = store.read();
+    data.users.push({
+      id: "lock-test-user",
+      username: "lock-test",
+      usernameLower: "lock-test",
+      publicProfileEnabled: false,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      showWorkspaceBreakdown: false,
+      createdAt: "2026-05-21T00:00:00.000Z",
+      updatedAt: "2026-05-21T00:00:00.000Z",
+    });
+    store.write(data);
+    const [code] = await once(child, "exit");
+
+    expect(code).toBe(0);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(new FileTokSyncStore(file).read().users[0]?.username).toBe(
+      "lock-test",
+    );
   });
 
   it("keeps usage ingestion idempotent and recomputes after device deletion", () => {
@@ -761,6 +812,28 @@ describe("TokSyncRepository", () => {
     expect(result.response.error.code).toBe("privacy_violation");
   });
 
+  it("rejects incompatible vault snapshot versions without mutating metrics", () => {
+    const repo = createRepo();
+    const recoveryPassphrase = "portable-vault-passphrase";
+    const payload = encryptedVaultPayload(recoveryPassphrase, {
+      format: "toksync-vault-v1",
+      schemaVersion: 2,
+      metrics: { events: [] },
+      devices: [],
+    });
+
+    const result = repo.previewVaultImport("demo", payload, recoveryPassphrase);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("vault preview unexpectedly succeeded");
+    expect(result.status).toBe(400);
+    expect(result.response.error).toMatchObject({
+      code: "invalid_payload",
+      message: "Vault schema version is not supported",
+    });
+    expect(repo.dashboardSummary("demo")).toBeNull();
+  });
+
   it("upserts a cost guardrail and keeps budget exceeded anomalies private", () => {
     const repo = createRepo();
     const auth = authorizeDevice(repo);
@@ -985,4 +1058,48 @@ describe("TokSyncRepository", () => {
 
 function sleepSync(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+async function waitForFile(file: string) {
+  const startedAt = Date.now();
+  while (!existsSync(file)) {
+    if (Date.now() - startedAt > 2_000) {
+      throw new Error(`Timed out waiting for ${file}`);
+    }
+    await delay(10);
+  }
+}
+
+function encryptedVaultPayload(recoveryPassphrase: string, snapshot: unknown) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(recoveryPassphrase, salt, 32);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(snapshot), "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return {
+    format: "toksync-vault-v1" as const,
+    schemaVersion: 1 as const,
+    createdAt: "2026-05-21T00:00:00.000Z",
+    payloadDigest: `sha256:${createHash("sha256").update(ciphertext).digest("base64url")}`,
+    includes: {
+      publicCache: false,
+      receipts: false,
+      includeContent: false,
+    },
+    keyDerivation: {
+      algorithm: "scrypt" as const,
+      salt: salt.toString("base64url"),
+      keyLength: 32 as const,
+    },
+    encryption: {
+      algorithm: "aes-256-gcm" as const,
+      iv: iv.toString("base64url"),
+      authTag: authTag.toString("base64url"),
+      ciphertext: ciphertext.toString("base64url"),
+    },
+  };
 }

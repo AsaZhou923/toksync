@@ -5,8 +5,10 @@ export default function DocsPage() {
     "Source Health Radar",
     "Cost Guardrails",
     "Private Usage Vault",
+    "Public Proof Pack",
+    "Wrapped",
   ];
-  const upcoming = ["Public Proof Pack"];
+  const upcoming = ["Content sync opt-in", "Search and eval export"];
 
   return (
     <div className="grid">
@@ -48,6 +50,16 @@ export default function DocsPage() {
         <a className="card" href="/docs/embed">
           <h2 className="section-title">README embed</h2>
           <p className="muted">Public badge and profile-card snippets.</p>
+        </a>
+        <a className="card" href="/app/proof-pack">
+          <h2 className="section-title">Public Proof Pack</h2>
+          <p className="muted">Digest-backed public proof from opt-in cache.</p>
+        </a>
+        <a className="card" href="/app/wrapped">
+          <h2 className="section-title">Wrapped</h2>
+          <p className="muted">
+            Private recap plus public low-sensitivity card.
+          </p>
         </a>
       </div>
       <section className="card">

@@ -11,8 +11,9 @@ export default async function HomePage() {
         <h1>TokSync</h1>
         <p className="lede">
           Tokscale-style AI coding usage visibility, rebuilt around private
-          multi-device sync. v0.1 collects metrics only, keeps content out of
-          payloads, and publishes README SVGs only after opt-in.
+          multi-device sync. v0.5 keeps metrics-only payloads, adds encrypted
+          vault recovery, and publishes README SVGs, Proof Packs, and Wrapped
+          cards only after opt-in.
         </p>
         <div className="hero-terminal" aria-label="TokSync quick start">
           <div className="terminal-line">
@@ -31,6 +32,9 @@ export default async function HomePage() {
           <a className="btn primary" href="/app">
             Open console
           </a>
+          <a className="btn" href="/app/proof-pack">
+            Proof Pack
+          </a>
           <a className="btn" href="/docs/getting-started">
             Quick start
           </a>
@@ -42,7 +46,7 @@ export default async function HomePage() {
             <span className="status-dot" />
             {health?.status === "ok" ? "api online" : "api offline"}
           </span>
-          <span className="muted">v0.1</span>
+          <span className="muted">v0.5</span>
         </div>
         <div className="preview-chart" aria-label="usage preview">
           {[34, 48, 30, 62, 74, 51, 83, 92, 57, 79, 88, 66].map(
@@ -88,10 +92,10 @@ export default async function HomePage() {
           </div>
           <div className="proof-row">
             <div>
-              <strong>Privacy receipts</strong>
-              <span>Field-level upload proof is planned after v0.1.</span>
+              <strong>Public Proof Pack</strong>
+              <span>Receipt digests and public aggregates stay shareable.</span>
             </div>
-            <span className="pill warn">v0.2</span>
+            <span className="pill good">v0.5</span>
           </div>
         </div>
       </aside>

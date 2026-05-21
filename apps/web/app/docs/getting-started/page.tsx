@@ -3,7 +3,7 @@ export default function GettingStartedPage() {
     <div className="grid">
       <header className="page-head">
         <div>
-          <p className="page-kicker">local v0.1 loop</p>
+          <p className="page-kicker">local metrics loop</p>
           <h1>Getting started</h1>
           <p className="lede">
             Use the demo user and synthetic fixtures to verify login, dry-run,

@@ -35,7 +35,7 @@ The v0.1 loop is:
 - Never include prompt text, assistant response text, tool arguments, tool output, file content, secrets, raw absolute project paths, source session details, or message text in public output.
 - Public profile is opt-in. README badge/profile-card data must come only from public aggregate state, not private raw events.
 - Leaderboard is not v0.1. If touched, it must remain opt-in and read only public aggregate state; later snapshots may be derived from that public state.
-- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, and the opt-in leaderboard are current v0.2/v0.3 implementation surfaces. Private Usage Vault and Public Proof Pack remain planned differentiators unless the product scope is explicitly changed.
+- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, the opt-in leaderboard, Private Usage Vault, Public Proof Pack, and Wrapped are current v0.2-v0.5 implementation surfaces. Content sync/search/eval remain planned differentiators unless the product scope is explicitly changed.
 - Billing, subscription plans, payment providers, paid limits, and billing UI are out of scope for v0.1.
 - Cost estimates are approximate; do not present them as provider billing truth.
 - Device fingerprinting must not use hostname, MAC address, OS machine id, username, home path, or project path. It should derive from a local random seed and server-side pepper.
@@ -46,8 +46,8 @@ The v0.1 loop is:
 - Runtime stack: TypeScript, Node 22-style ESM, Turbo, Vitest, Playwright.
 - Apps:
   - `apps/agent`: Commander CLI with `login`, `logout`, `status`, `sources list`, and `sync`.
-  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, badge, embed, and opt-in leaderboard routes.
-  - `apps/web`: Next.js app for landing, dashboard, docs, device auth, source health, receipts, merge, cost guardrails, leaderboard settings, public profile, and embed settings.
+  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, public proof, wrapped summary/card, badge, embed, and opt-in leaderboard routes.
+  - `apps/web`: Next.js app for landing, dashboard, docs, device auth, source health, receipts, merge, cost guardrails, leaderboard settings, public profile, embed settings, Proof Pack, and Wrapped.
   - `apps/worker`: lightweight worker/health surface; rollup work is currently synchronous in the repository layer.
 - Packages:
   - `packages/shared`: Zod schemas, source registry, formatting, and shared errors.
@@ -231,6 +231,9 @@ Current important routes include:
 - `DELETE /v1/settings/submitted-data`
 - `GET|POST /v1/public-profile`
 - `GET /v1/public-profile/:username`
+- `GET /v1/public-proof/:username`
+- `GET /v1/wrapped`
+- `GET /v1/wrapped/:username`
 - `POST /v1/leaderboard/opt-in`
 - `GET /v1/badge/:username`
 - `GET /v1/embed/:username`

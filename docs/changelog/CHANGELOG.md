@@ -2,6 +2,136 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-22-v0-5-proof-wrapped-web-console"></a>
+
+## 2026-05-22 - v0.5 proof and wrapped web console
+
+日期：2026-05-22
+
+本次更新把 v0.5 从 Public Proof Pack / Wrapped API 前置闸门推进到可见产品面：Web 控制台新增 Proof Pack 和 Wrapped 页面，导航、首页、docs、E2E/visual smoke 与外部文档同步到 v0.5 当前状态。内容同步、搜索和 eval export 仍保持后置 opt-in，不在本次范围内打开。
+
+## 概览
+
+- 新增 `/app/proof-pack`，展示 public profile 状态、proof digest、公开字段、排除字段和 receipt digest ledger。
+- 新增 `/app/wrapped`，展示私有 Wrapped summary、公开 Wrapped card 状态和 public endpoint。
+- Share 导航、dashboard public surface、docs 和首页增加 Proof Pack / Wrapped 入口，并把旧 v0.1/v0.4 阶段文案更新到 v0.5。
+- Public Proof Pack / Wrapped Web 页面只消费 `/v1/public-proof/:username`、`/v1/wrapped`、`/v1/wrapped/:username` 和 public profile 设置，不直接读取 private raw events。
+- Web server API helper 会转发浏览器 session cookie；Proof Pack / Wrapped 页面用 `/v1/auth/session` 的真实用户名生成 public endpoint，避免 hosted OAuth 场景误读 dev user。
+
+## 测试与验证
+
+- Web typecheck 已覆盖新增页面和 API 类型。
+- Playwright E2E 新增 `/app/proof-pack`、`/app/wrapped` 可见性、public profile disabled 和公开字段 toggle-off 断言。
+- Playwright visual smoke 新增 Proof Pack / Wrapped 非空视觉状态断言。
+
+## 文档同步
+
+- `README.md`、`README.zh-CN.md`、`AGENTS.md`、外部 overview、PRD、architecture、sitemap、当前功能指南、TokSync 入口文档、对标计划和文档变更清单已同步 v0.5 Web 控制台状态。
+- 外部 Update Logs 镜像需继续保持与本 changelog 一致。
+
+## 影响文件
+
+### Apps
+
+- `apps/web/app/app/proof-pack/page.tsx`
+- `apps/web/app/app/wrapped/page.tsx`
+- `apps/web/app/app/page.tsx`
+- `apps/web/app/docs/embed/page.tsx`
+- `apps/web/app/docs/getting-started/page.tsx`
+- `apps/web/app/docs/page.tsx`
+- `apps/web/app/layout.tsx`
+- `apps/web/app/page.tsx`
+- `apps/web/app/privacy/page.tsx`
+- `apps/web/app/terms/page.tsx`
+- `apps/web/lib/api.ts`
+
+### Tests
+
+- `tests/e2e/toksync.e2e.spec.ts`
+- `tests/visual/embed.visual.spec.ts`
+
+### Docs
+
+- `AGENTS.md`
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\TokSync.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\overview.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\prd.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\architecture.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\sitemap.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync Tokscale 对标调研与前端页面设计计划.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\02 - Architecture\TokSync 技术架构文档.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\05 - Reviews\TokSync v0.4 后续架构建议评估报告.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\09 - Changelog\Update Logs\CHANGELOG.md`
+
+<a id="2026-05-22-phase0-phase1-public-proof"></a>
+
+## 2026-05-22 - phase 0/1 public proof gate
+
+日期：2026-05-22
+
+本次更新完成 v0.4 后续架构建议报告中的 Phase 0 和 Phase 1：用可复用合同测试锁住 FileStore 当前 ingestion/rollup 语义，补齐 Gemini/OpenClaw parser、FileStore 锁竞争和 Vault 版本不兼容回归；同时落地 Public Proof Pack 与 Wrapped API/Web 第一版，确保公开证明只读 public aggregate、public-safe daily 和 receipt digest。
+
+## 概览
+
+- 新增 `GET /v1/public-proof/:username`，返回 `proofDigest`、公开字段列表、排除字段列表、公开 aggregate summary、public-safe daily 和 receipt digest 列表。
+- 新增 `GET /v1/wrapped` 私有 summary 和 `GET /v1/wrapped/:username` public-safe Wrapped card。
+- Public proof/wrapped 在 public profile 未开启时返回 disabled/null，公开路径不读取 private raw events。
+- `showCost=false` 时公开 proof/wrapped 不返回 cost 字段；source/model/workspace breakdown 继续受公开开关控制。
+- 从 `source-parsers.ts` 抽出 `source-parsers/shared.ts` 的 JSON/JSONL 读取层，保持 `parseSourceSpecificUsageFile()` 对外入口不变。
+
+## 测试与验证
+
+- 新增 `packages/db/src/repository.contract.test.ts`，覆盖 FileStore ingestion 的 idempotency、wrong-device、cross-device replay、stable identity update、receipt digest、source health、merge issue、public cache、device delete、cost anomalies 和 vault import rollup。
+- 扩展 `packages/collector-core/src/source-parsers.test.ts`，覆盖 Gemini tmp chat 和 OpenClaw transcript direct parser，并断言正文不会进入 normalized events。
+- 扩展 `packages/db/src/repository.test.ts`，覆盖 active FileStore lock contention 和 vault schema version 不兼容路径。
+- 扩展 `apps/api/src/app.test.ts`，覆盖 Public Proof Pack / Wrapped 低敏公开 payload 和私有 wrapped auth gate。
+
+## 文档同步
+
+- README、中文 README、AGENTS、外部 specs、当前功能指南和 v0.4 后续架构建议评估报告已同步 Phase 0/1 完成状态。
+- 外部 Update Logs 镜像需继续保持与本 changelog 一致。
+
+## 影响文件
+
+### Apps
+
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+
+### Packages
+
+- `packages/collector-core/src/source-parsers.ts`
+- `packages/collector-core/src/source-parsers/shared.ts`
+- `packages/collector-core/src/source-parsers.test.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/db/src/repository.contract.test.ts`
+
+### Docs
+
+- `AGENTS.md`
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\overview.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\prd.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\sitemap.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\api-design.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\architecture.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\database-design.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\testing.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\TokSync.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\02 - Architecture\TokSync 技术架构文档.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\05 - Reviews\TokSync v0.4 后续架构建议评估报告.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\09 - Changelog\Update Logs\CHANGELOG.md`
+
 <a id="2026-05-21-v0-4-security-review-hardening"></a>
 
 ## 2026-05-21 - v0.4 security review hardening

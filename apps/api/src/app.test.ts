@@ -809,6 +809,96 @@ describe("TokSync API", () => {
     expect(serializedProfile).not.toContain("sha256:private");
   });
 
+  it("serves proof pack and wrapped public views from low-sensitivity fields only", async () => {
+    const { api } = testContext();
+    const { api: lockedApi } = lockedContext();
+    const auth = await connectDevice(api);
+    const secretPath = "C:/Users/alice/private-proof-workspace";
+    await postBatch(
+      api,
+      auth.deviceToken,
+      usageBatch(auth.deviceId, [
+        usageEvent(auth.deviceId, {
+          workspaceKeyHash: "sha256:proof-private-workspace",
+          workspaceLabel: secretPath,
+          dedupKey: "codex:public-proof-private-dedup",
+          sourceSessionId: "proof-private-session",
+          sourceMessageId: "proof-private-message",
+        }),
+      ]),
+    );
+
+    expect((await lockedApi.request("/v1/wrapped")).status).toBe(401);
+    expect(
+      (await json<any>(await api.request("/v1/public-proof/demo"))).proof,
+    ).toBeNull();
+
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: true,
+        showCost: false,
+        showSourceBreakdown: true,
+        showModelBreakdown: true,
+      }),
+      headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
+    });
+
+    const privateWrapped = await json<any>(
+      await api.request("/v1/wrapped", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    const proofPack = await json<any>(
+      await api.request("/v1/public-proof/demo"),
+    );
+    const publicWrapped = await json<any>(
+      await api.request("/v1/wrapped/demo"),
+    );
+    const serializedPublic = `${JSON.stringify(proofPack)}${JSON.stringify(
+      publicWrapped,
+    )}`;
+
+    expect(privateWrapped.wrapped).toMatchObject({
+      visibility: "private",
+      totals: { tokens: 157, activeDays: 1 },
+      publicShareAvailable: true,
+    });
+    expect(proofPack).toMatchObject({
+      enabled: true,
+      username: "demo",
+      proof: {
+        schemaVersion: 1,
+        proofType: "public-proof-pack",
+        summary: { totals: { totalTokens: 157, activeDays: 1 } },
+        receiptCount: 1,
+      },
+    });
+    expect(proofPack.proof.proofDigest).toMatch(/^sha256:/);
+    expect(proofPack.proof.receiptDigests[0].payloadDigest).toMatch(/^sha256:/);
+    expect(proofPack.proof.summary.totals).not.toHaveProperty("totalCostUsd");
+    expect(publicWrapped).toMatchObject({
+      enabled: true,
+      username: "demo",
+      wrapped: {
+        visibility: "public",
+        totals: { totalTokens: 157, activeDays: 1 },
+      },
+    });
+    expect(serializedPublic).not.toContain(secretPath);
+    expect(serializedPublic).not.toContain("sha256:proof-private-workspace");
+    expect(serializedPublic).not.toContain("proof-private-session");
+    expect(serializedPublic).not.toContain("proof-private-message");
+    expect(serializedPublic).not.toContain("codex:public-proof-private-dedup");
+    expect(serializedPublic).not.toContain(auth.deviceId);
+    expect(serializedPublic).not.toContain("userId");
+    expect(serializedPublic).not.toContain("deviceFingerprintHash");
+    expect(serializedPublic).not.toContain("dedupKey");
+    expect(serializedPublic).not.toContain("sourceSessionId");
+    expect(serializedPublic).not.toContain("sourceMessageId");
+    expect(serializedPublic).not.toContain("workspaceKeyHash");
+  });
+
   it("requires private auth for cost guardrails and rejects invalid payloads", async () => {
     const { api } = lockedContext();
 

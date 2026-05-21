@@ -15,6 +15,7 @@ import {
   Settings,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Trophy,
   Workflow,
 } from "lucide-react";
@@ -88,6 +89,13 @@ const NAV_GROUPS = [
     title: "Share",
     items: [
       { href: "/app/embed", label: "README embed", icon: BadgeCheck },
+      {
+        href: "/app/proof-pack",
+        label: "Proof Pack",
+        icon: FileCheck2,
+        badge: "v0.5",
+      },
+      { href: "/app/wrapped", label: "Wrapped", icon: Sparkles, badge: "v0.5" },
       {
         href: "/app/leaderboard",
         label: "Leaderboard",

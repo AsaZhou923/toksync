@@ -41,6 +41,16 @@ test.describe("TokSync visual smoke", () => {
     await expect(page.getByText("Private vault lane")).toBeVisible();
     await assertVisualSignal(page, "body", "vault.png", 60);
 
+    await page.goto("/app/proof-pack");
+    await expect(
+      page.getByRole("heading", { name: "Public Proof Pack" }),
+    ).toBeVisible();
+    await assertVisualSignal(page, "body", "proof-pack.png", 60);
+
+    await page.goto("/app/wrapped");
+    await expect(page.getByRole("heading", { name: "Wrapped" })).toBeVisible();
+    await assertVisualSignal(page, "body", "wrapped.png", 60);
+
     await page.goto("/u/demo");
     await expect(page.getByRole("heading", { name: "@demo" })).toBeVisible();
     await assertVisualSignal(page, "body", "public-profile.png", 50);

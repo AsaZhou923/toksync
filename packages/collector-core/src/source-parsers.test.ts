@@ -101,6 +101,118 @@ describe("source-specific parsers", () => {
     );
   });
 
+  it("parses Gemini tmp chat records directly and drops message bodies", async () => {
+    const file = tempFile(
+      "gemini",
+      "gemini-session.json",
+      JSON.stringify({
+        sessionId: "gemini-private-session",
+        messages: [
+          {
+            type: "gemini",
+            id: "turn-1",
+            model: "gemini-2.5-pro",
+            timestamp: "2026-04-10T10:00:00.000Z",
+            tokens: {
+              input: 120,
+              cached: 20,
+              output: 30,
+              thoughts: 10,
+              tool: 5,
+              total: 165,
+            },
+            prompt: "SECRET_GEMINI_PROMPT_SHOULD_NOT_UPLOAD",
+            response: "SECRET_GEMINI_RESPONSE_SHOULD_NOT_UPLOAD",
+          },
+        ],
+      }),
+    );
+
+    const events = await parseSourceSpecificUsageFile(
+      parserContext("gemini", file),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events?.[0]).toMatchObject({
+      source: "gemini",
+      sourceSessionId: "gemini-private-session",
+      sourceMessageId: "turn-1",
+      modelId: "gemini-2.5-pro",
+      providerId: "google",
+      timestampMs: Date.parse("2026-04-10T10:00:00.000Z"),
+      tokens: {
+        input: 105,
+        cacheRead: 20,
+        cacheWrite: 0,
+        output: 30,
+        reasoning: 10,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(
+      "SECRET_GEMINI_PROMPT_SHOULD_NOT_UPLOAD",
+    );
+    expect(JSON.stringify(events)).not.toContain(
+      "SECRET_GEMINI_RESPONSE_SHOULD_NOT_UPLOAD",
+    );
+  });
+
+  it("parses OpenClaw transcript records directly and drops assistant text", async () => {
+    const file = tempFile(
+      "openclaw",
+      "session-abc.jsonl",
+      [
+        {
+          type: "model_change",
+          modelId: "claude-3-5-sonnet",
+          provider: "anthropic",
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-11T09:15:00.000Z",
+            usage: {
+              inputTokens: 200,
+              outputTokens: 50,
+              cacheRead: 25,
+              cacheWrite: 5,
+              reasoningTokens: 15,
+              cost: { total: 0.07 },
+            },
+            content: "SECRET_OPENCLAW_ASSISTANT_TEXT_SHOULD_NOT_UPLOAD",
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+
+    const events = await parseSourceSpecificUsageFile(
+      parserContext("openclaw", file),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events?.[0]).toMatchObject({
+      source: "openclaw",
+      sourceSessionId: "session-abc",
+      sourceMessageId: "assistant-1",
+      modelId: "claude-3-5-sonnet",
+      providerId: "anthropic",
+      costUsd: 0.07,
+      tokens: {
+        input: 200,
+        output: 50,
+        cacheRead: 25,
+        cacheWrite: 5,
+        reasoning: 15,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(
+      "SECRET_OPENCLAW_ASSISTANT_TEXT_SHOULD_NOT_UPLOAD",
+    );
+  });
+
   it("returns null for generic source files so the shared normalizer owns them", async () => {
     const file = tempFile("codex", "events.jsonl", "{}\n");
 

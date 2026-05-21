@@ -3,6 +3,8 @@ import { apiUrl } from "../../../lib/api";
 export default function EmbedDocsPage() {
   const badge = apiUrl("/v1/badge/your-username.svg?metric=tokens");
   const card = apiUrl("/v1/embed/your-username.svg?theme=dark");
+  const proof = apiUrl("/v1/public-proof/your-username");
+  const wrapped = apiUrl("/v1/wrapped/your-username");
   return (
     <div className="grid">
       <header className="page-head">
@@ -25,12 +27,21 @@ export default function EmbedDocsPage() {
           <h2 className="section-title">Profile card</h2>
           <div className="command">{`![TokSync profile](${card})`}</div>
         </div>
+        <div className="card">
+          <h2 className="section-title">Proof Pack</h2>
+          <div className="command">{proof}</div>
+        </div>
+        <div className="card">
+          <h2 className="section-title">Wrapped</h2>
+          <div className="command">{wrapped}</div>
+        </div>
       </section>
       <section className="card">
-        <h2 className="section-title">v0.1 boundary</h2>
+        <h2 className="section-title">Public boundary</h2>
         <p className="muted">
-          Leaderboard, public proof packs, and richer profile graphs are planned
-          after v0.1 and must remain opt-in public aggregate features.
+          Badge, card, Proof Pack, Wrapped, and leaderboard surfaces remain
+          opt-in public aggregate features. Content sync, search, and eval
+          export are still future opt-in work.
         </p>
       </section>
     </div>

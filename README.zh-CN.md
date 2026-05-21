@@ -2,7 +2,7 @@
 
 [English](./README.md)
 
-TokSync v0.4 是面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
+TokSync v0.5 是面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
 
 当前仓库是可本地运行的 pnpm/Turbo monorepo。本地开发闭环仍以 `FileTokSyncStore` 为主，Postgres + Drizzle 是 hosted 目标；v0.4 已补齐 `vault_exports` SQL/Drizzle schema 和 vault ledger adapter。
 
@@ -10,8 +10,8 @@ TokSync v0.4 是面向 AI coding 工具的 metrics-only telemetry hub。它跨�
 
 - CLI agent：`login`、`logout`、`status`、`sources list`、`sync --dry-run`、`sync`，并支持 `tsk_` user API token/headless sync。
 - Collector：Codex CLI、Claude Code、OpenCode、Cursor usage CSV、GitHub Copilot OTEL JSONL、Gemini CLI tmp chat JSON/JSONL、OpenClaw session/SDK usage logs。
-- API：GitHub OAuth、设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、leaderboard opt-in、metrics JSON/CSV export、Private Usage Vault、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card。
-- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、exports/local viewer、usage vault、models、projects、sync runs、embed、settings、docs、公开 profile，并启用 CSP/安全响应头。
+- API：GitHub OAuth、设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、leaderboard opt-in、metrics JSON/CSV export、Private Usage Vault、Public Proof Pack、Wrapped、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card。
+- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、exports/local viewer、usage vault、Proof Pack、Wrapped、models、projects、sync runs、embed、settings、docs、公开 profile，并启用 CSP/安全响应头。
 - Storage：本地默认 `FileTokSyncStore`；hosted SQL shape 已包含 `vault_exports` ledger。设置 `TOKSYNC_VAULT_ARTIFACT_DIR` 后，vault artifact 可写入私有对象目录，ledger 只保存 storage key 和 digest。
 - 测试：Vitest、Playwright E2E、visual smoke、perf smoke、Turbo typecheck/lint/build。
 
@@ -53,7 +53,7 @@ TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 ## 隐私边界
 
 - Public profile 默认关闭。
-- README badge/profile-card endpoint 只读取 public aggregate cache。
+- README badge/profile-card、Public Proof Pack 和 public Wrapped endpoint 只读取 public aggregate cache 或 receipt digest。
 - Public output 不得暴露设备名、原始路径、workspace hash、source session id、message id、message text、工具参数或工具输出。
 - workspace/project label 默认私有，只有用户显式允许后才可进入公开输出。
 - Receipt、Merge、Health、Export、Guardrails、Vault 使用低敏字段类别和聚合摘要，不返回 prompt、assistant reply、tool args、tool output、file content、raw path、source session id、source message id 或 workspace hash。
@@ -62,26 +62,29 @@ TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 - Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。
 - leaderboard 需要先开启 public profile，再单独 opt-in，并且只读取 public aggregate cache；排行榜范围只做全局榜。
 - Private Usage Vault 使用至少 16 字符的用户 recovery passphrase 加密 metrics-only artifact，新导出记录显式 scrypt 参数，支持下载、preview 和跨实例 import；不导出正文或工具 payload。
-- content sync、search、eval export 和 Public Proof Pack 仍是后续 opt-in 能力。
+- content sync、search 和 eval export 仍是后续 opt-in 能力。
 
-## v0.4 范围
+## v0.5 范围
 
-| 能力                           | 当前状态       | 边界                                                                                        |
-| ------------------------------ | -------------- | ------------------------------------------------------------------------------------------- |
-| Public label privacy           | 已实现         | project/workspace label 默认私有，显式开启后只展示安全 label                                |
-| Merge Copilot                  | 已实现最小闭环 | 解释 duplicate/replay，不展示原始消息标识                                                   |
-| Sync Privacy Receipt           | 已实现最小闭环 | digest、安全字段类别、排除类别                                                              |
-| Source Health Radar            | 已实现最小闭环 | 私有 source 覆盖、最近同步、缺失和保留期风险                                                |
-| GitHub OAuth                   | 已实现第一版   | 首个生产 browser login 路径；email magic link 后置                                          |
-| User API token                 | 已实现最小闭环 | 创建/列出/撤销 metadata，明文 token 只在创建响应返回一次                                    |
-| Metrics export/local viewer    | 已实现最小闭环 | JSON/CSV 只导出安全 metrics 列                                                              |
-| Submitted public data deletion | 已实现最小闭环 | 清理公开 cache，不删除私有 raw metrics                                                      |
-| Cost Guardrails                | 已实现第一版   | 私有预算阈值、cost spike、unknown pricing、budget exceeded                                  |
-| Leaderboard                    | 已实现第一版   | public profile + 单独 opt-in，只读取公开聚合 cache；全局榜 only                             |
-| Source parity                  | 已实现第一版   | Cursor CSV、Copilot OTEL、Gemini tmp chats、OpenClaw usage logs；仍保持 metrics-only        |
-| Private Usage Vault            | 已实现第一版   | passphrase 加密导出、artifact 下载/存储、import preview、幂等恢复；hosted ledger SQL 已补齐 |
+| 能力                           | 当前状态       | 边界                                                                                                                      |
+| ------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Public label privacy           | 已实现         | project/workspace label 默认私有，显式开启后只展示安全 label                                                              |
+| Merge Copilot                  | 已实现最小闭环 | 解释 duplicate/replay，不展示原始消息标识                                                                                 |
+| Sync Privacy Receipt           | 已实现最小闭环 | digest、安全字段类别、排除类别                                                                                            |
+| Source Health Radar            | 已实现最小闭环 | 私有 source 覆盖、最近同步、缺失和保留期风险                                                                              |
+| GitHub OAuth                   | 已实现第一版   | 首个生产 browser login 路径；email magic link 后置                                                                        |
+| User API token                 | 已实现最小闭环 | 创建/列出/撤销 metadata，明文 token 只在创建响应返回一次                                                                  |
+| Metrics export/local viewer    | 已实现最小闭环 | JSON/CSV 只导出安全 metrics 列                                                                                            |
+| Submitted public data deletion | 已实现最小闭环 | 清理公开 cache，不删除私有 raw metrics                                                                                    |
+| Cost Guardrails                | 已实现第一版   | 私有预算阈值、cost spike、unknown pricing、budget exceeded                                                                |
+| Leaderboard                    | 已实现第一版   | public profile + 单独 opt-in，只读取公开聚合 cache；全局榜 only                                                           |
+| Source parity                  | 已实现第一版   | Cursor CSV、Copilot OTEL、Gemini tmp chats、OpenClaw usage logs；仍保持 metrics-only                                      |
+| Private Usage Vault            | 已实现第一版   | passphrase 加密导出、artifact 下载/存储、import preview、幂等恢复；hosted ledger SQL 已补齐                               |
+| Phase 0 稳定化门禁             | 已实现         | FileStore ingestion contract tests、Gemini/OpenClaw direct parser 测试、锁竞争和 vault 版本不兼容回归                     |
+| Public Proof Pack              | 已实现第一版   | `/v1/public-proof/:username` 只读 public aggregate、public-safe daily 和 receipt digest；`/app/proof-pack` 提供控制台视图 |
+| Wrapped                        | 已实现第一版   | `/app/wrapped`、`/v1/wrapped` 私有 summary；`/v1/wrapped/:username` 公开低敏卡片只读 public cache                         |
 
-仍不属于当前范围：email magic link、billing/订阅/支付、content sync、全文/语义搜索、eval dataset export、团队版、Public Proof Pack、leaderboard 的 source/model 分榜、全局榜 cursor 分页增强、duplicate_cost_jump 异常解释。
+仍不属于当前范围：email magic link、billing/订阅/支付、content sync、全文/语义搜索、eval dataset export、团队版、leaderboard 的 source/model 分榜、全局榜 cursor 分页增强、duplicate_cost_jump 异常解释。
 
 ## 常用命令
 
