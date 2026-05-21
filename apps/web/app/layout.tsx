@@ -2,6 +2,7 @@ import type { Metadata, Route, Viewport } from "next";
 import Link from "next/link";
 import {
   Activity,
+  Archive,
   BadgeCheck,
   BookOpen,
   Database,
@@ -74,6 +75,12 @@ const NAV_GROUPS = [
         label: "Local viewer",
         icon: Download,
         badge: "local",
+      },
+      {
+        href: "/app/vault",
+        label: "Usage vault",
+        icon: Archive,
+        badge: "v0.4",
       },
     ],
   },

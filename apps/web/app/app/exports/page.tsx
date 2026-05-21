@@ -80,8 +80,9 @@ export default async function ExportsPage() {
             <h2 className="section-title">Export boundary</h2>
             <p className="muted">
               This view uses dashboard aggregates and sync metadata only.
-              Private Usage Vault and encrypted restore remain later roadmap
-              work.
+              Private Usage Vault now owns encrypted backup, artifact download,
+              preview, and restore; this surface stays focused on aggregate
+              JSON/CSV inspection.
             </p>
           </div>
           <span className="pill good">aggregate-only</span>

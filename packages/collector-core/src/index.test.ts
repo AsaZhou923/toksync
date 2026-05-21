@@ -75,6 +75,7 @@ describe("collector-core fixtures", () => {
         source,
         modelId: "unknown-model",
         providerId: "unknown",
+        costUsd: undefined,
         tokens: {
           input: 1,
           output: 2,
@@ -317,6 +318,357 @@ describe("collector-core fixtures", () => {
     expect(result.errors).toEqual([]);
     expect(result.events[0]?.source).toBe("codex");
   });
+
+  it.each([
+    ["cursor", "cursor"],
+    ["copilot", "copilot"],
+    ["gemini", "gemini"],
+    ["openclaw", "openclaw"],
+  ])("infers %s fixtures as %s", async (fixtureDir, expectedSource) => {
+    const fixture = writeFixture(fixtureDir, [
+      {
+        sourceSessionId: `${expectedSource}-session`,
+        sourceMessageId: "m1",
+        modelId: "unknown-model",
+        timestampMs: 1770000000000,
+        tokens: { input: 1, output: 1 },
+      },
+    ]);
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.errors).toEqual([]);
+    expect(result.events[0]?.source).toBe(expectedSource);
+    expect(result.events[0]?.costUsd).toBeUndefined();
+  });
+
+  it("parses Cursor usage CSV without uploading private labels", async () => {
+    const fixture = writeTextFixture(
+      "cursor",
+      "usage.csv",
+      [
+        "Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost",
+        '"2026-04-09T18:02:13.576Z","cloud-secret","auto-private","On-Demand","gpt-5-codex","No","100","80","20","30","130","0.11"',
+      ].join("\n"),
+    );
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const serialized = JSON.stringify(result.events);
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "cursor",
+      sourceSessionId: "cursor-active",
+      sourceMessageId: "cloud-secret",
+      modelId: "gpt-5-codex",
+      providerId: "openai",
+      tokens: {
+        input: 80,
+        output: 30,
+        cacheRead: 20,
+        cacheWrite: 20,
+        reasoning: 0,
+      },
+      costUsd: 0.11,
+    });
+    expect(serialized).not.toContain("private-client");
+  });
+
+  it("parses Copilot OTEL chat spans and suppresses lower-priority duplicate records", async () => {
+    const fixture = writeTextFixture(
+      "copilot",
+      "otel.jsonl",
+      [
+        {
+          type: "span",
+          traceId: "trace-1",
+          spanId: "agent-1",
+          name: "invoke_agent GitHub Copilot Chat",
+          endTime: [1775934270, 0],
+          attributes: {
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.response.model": "gpt-5.4-mini",
+            "gen_ai.conversation.id": "conv-private",
+            "gen_ai.usage.input_tokens": 100,
+            "gen_ai.usage.output_tokens": 30,
+          },
+        },
+        {
+          type: "span",
+          traceId: "trace-1",
+          spanId: "chat-1",
+          name: "chat gpt-5.4-mini",
+          endTime: [1775934264, 967317833],
+          attributes: {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.response.model": "gpt-5.4-mini",
+            "gen_ai.conversation.id": "conv-private",
+            "gen_ai.usage.input_tokens": 60,
+            "gen_ai.usage.cache_read.input_tokens": 10,
+            "gen_ai.usage.output_tokens": 8,
+          },
+          body: "SECRET_PROMPT_SHOULD_NOT_UPLOAD",
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const serialized = JSON.stringify(result.events);
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "copilot",
+      sourceSessionId: "conv-private",
+      sourceMessageId: "chat-1",
+      dedupKey: "copilot:trace-1:chat-1",
+      modelId: "gpt-5.4-mini",
+      providerId: "openai",
+      timestampMs: 1775934264967,
+      tokens: {
+        input: 50,
+        output: 8,
+        cacheRead: 10,
+        cacheWrite: 0,
+        reasoning: 0,
+      },
+    });
+    expect(serialized).not.toContain("SECRET_PROMPT_SHOULD_NOT_UPLOAD");
+  });
+
+  it("parses Gemini CLI tmp chat JSONL and replaces duplicate message ids", async () => {
+    const fixture = writeTextFixture(
+      "gemini",
+      "session-abc.jsonl",
+      [
+        {
+          type: "init",
+          model: "gemini-3.1-pro-preview",
+          session_id: "gemini-session-1",
+        },
+        {
+          type: "gemini",
+          id: "msg-1",
+          model: "gemini-3.1-pro-preview",
+          timestamp: "2026-05-01T00:01:00.000Z",
+          content: "SECRET_PROMPT_SHOULD_NOT_UPLOAD",
+          tokens: {
+            input: 10,
+            output: 1,
+            cached: 0,
+            thoughts: 0,
+            tool: 0,
+            total: 11,
+          },
+        },
+        {
+          type: "gemini",
+          id: "msg-1",
+          model: "gemini-3.1-pro-preview",
+          timestamp: "2026-05-01T00:02:00.000Z",
+          tokens: {
+            input: 20,
+            output: 2,
+            cached: 5,
+            thoughts: 3,
+            tool: 0,
+            total: 25,
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const serialized = JSON.stringify(result.events);
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "gemini",
+      sourceSessionId: "gemini-session-1",
+      sourceMessageId: "msg-1",
+      modelId: "gemini-3.1-pro-preview",
+      providerId: "google",
+      tokens: {
+        input: 15,
+        output: 2,
+        cacheRead: 5,
+        cacheWrite: 0,
+        reasoning: 3,
+      },
+    });
+    expect(serialized).not.toContain("SECRET_PROMPT_SHOULD_NOT_UPLOAD");
+  });
+
+  it("parses OpenClaw SDK run usage without uploading command text", async () => {
+    const fixture = writeTextFixture(
+      "openclaw",
+      "session.jsonl",
+      [
+        {
+          id: "event-1",
+          event: "run.completed",
+          ts: 1777000000000,
+          data: {
+            runId: "run-private",
+            sessionId: "session-private",
+            model: "claude-sonnet-4.5",
+            workspace: { cwd: "C:/Users/alice/private-client/source" },
+            usage: {
+              input: 100,
+              output: 20,
+              cacheRead: 5,
+              cacheWrite: 2,
+              costUsd: 0.03,
+            },
+            output: { text: "SECRET_PROMPT_SHOULD_NOT_UPLOAD" },
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const serialized = JSON.stringify(result.events);
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "openclaw",
+      sourceSessionId: "session-private",
+      sourceMessageId: "event-1",
+      modelId: "claude-sonnet-4.5",
+      providerId: "anthropic",
+      workspaceLabel: "source",
+      tokens: {
+        input: 100,
+        output: 20,
+        cacheRead: 5,
+        cacheWrite: 2,
+        reasoning: 0,
+      },
+      costUsd: 0.03,
+    });
+    expect(result.events[0]?.workspaceKeyHash).toMatch(/^sha256:/);
+    expect(serialized).not.toContain("SECRET_PROMPT_SHOULD_NOT_UPLOAD");
+    expect(serialized).not.toContain("private-client");
+    expect(serialized).not.toContain("alice");
+  });
+
+  it("parses OpenClaw sessions.json indexes and transcript model state", async () => {
+    const fixture = writeOpenClawIndexedFixture({
+      "sessions.json": JSON.stringify({
+        "agent:main:main": {
+          sessionId: "indexed-session",
+          sessionFile: "indexed-session.jsonl",
+        },
+      }),
+      "indexed-session.jsonl": [
+        {
+          type: "model_change",
+          id: "model-1",
+          provider: "anthropic",
+          modelId: "claude-opus-4-6",
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "SECRET_PROMPT_SHOULD_NOT_UPLOAD" },
+            ],
+            usage: {
+              input: 100,
+              output: 50,
+              cacheRead: 25,
+              cacheWrite: 10,
+              cost: { total: 0.05 },
+            },
+            timestamp: 1700000000000,
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    });
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const serialized = JSON.stringify(result.events);
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "openclaw",
+      sourceSessionId: "indexed-session",
+      sourceMessageId: "assistant-1",
+      modelId: "claude-opus-4-6",
+      providerId: "anthropic",
+      tokens: {
+        input: 100,
+        output: 50,
+        cacheRead: 25,
+        cacheWrite: 10,
+        reasoning: 0,
+      },
+      costUsd: 0.05,
+    });
+    expect(serialized).not.toContain("SECRET_PROMPT_SHOULD_NOT_UPLOAD");
+  });
+
+  it("parses OpenClaw standalone archived transcript filenames", async () => {
+    const fixture = writeOpenClawIndexedFixture({
+      "session-archived.jsonl.deleted.1700000000000": [
+        {
+          type: "custom",
+          customType: "model-snapshot",
+          data: {
+            provider: "openai-codex",
+            modelId: "gpt-5.3-codex",
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-2",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 10,
+              output: 5,
+              cacheRead: 1,
+              cacheWrite: 2,
+            },
+            timestamp: 1700000001000,
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    });
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      source: "openclaw",
+      sourceSessionId: "session-archived",
+      modelId: "gpt-5.3-codex",
+      providerId: "openai-codex",
+      tokens: {
+        input: 10,
+        output: 5,
+        cacheRead: 1,
+        cacheWrite: 2,
+        reasoning: 0,
+      },
+    });
+  });
 });
 
 function replayRecord(messageId: string, timestampMs: number) {
@@ -354,6 +706,24 @@ function writeFixture(
         )
         .join("\n"),
     );
+  }
+  return path.dirname(fixture);
+}
+
+function writeTextFixture(source: string, fileName: string, content: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), `toksync-${source}-`));
+  const fixture = path.join(dir, source, "case", "input");
+  mkdirSync(fixture, { recursive: true });
+  writeFileSync(path.join(fixture, fileName), content);
+  return path.dirname(fixture);
+}
+
+function writeOpenClawIndexedFixture(files: Record<string, string>) {
+  const dir = mkdtempSync(path.join(tmpdir(), "toksync-openclaw-"));
+  const fixture = path.join(dir, "openclaw", "case", "input");
+  mkdirSync(fixture, { recursive: true });
+  for (const [fileName, content] of Object.entries(files)) {
+    writeFileSync(path.join(fixture, fileName), content);
   }
   return path.dirname(fixture);
 }

@@ -24,6 +24,8 @@ import {
   normalizeUsername,
   publicProfileInputSchema,
   userApiTokenInputSchema,
+  vaultExportInputSchema,
+  vaultImportPreviewInputSchema,
 } from "@toksync/shared";
 
 export interface ApiAppOptions {
@@ -68,9 +70,10 @@ export function createApiApp(options: ApiAppOptions = {}) {
   app.use(
     "*",
     cors({
-      origin: "*",
+      origin: resolveCorsOrigin,
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
       allowHeaders: ["Authorization", "Content-Type", "X-TokSync-User"],
+      credentials: true,
     }),
   );
   app.use("*", rateLimit());
@@ -381,6 +384,101 @@ export function createApiApp(options: ApiAppOptions = {}) {
         "X-TokSync-Export-Rows": String(exported.rowCount),
       },
     });
+  });
+
+  app.get("/v1/vault/exports", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    return c.json({ exports: repo.listVaultExports(username) });
+  });
+
+  app.get("/v1/vault/exports/:id", (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const exported = repo.getVaultExport(username, c.req.param("id"));
+    if (!exported)
+      return c.json(apiError("not_found", "Vault export not found"), 404);
+    return c.json(exported);
+  });
+
+  app.post("/v1/vault/exports", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = vaultExportInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid vault export payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    }
+    if (parsed.data.includeContent) {
+      return c.json(
+        apiError(
+          "feature_not_enabled",
+          "TokSync content export is not enabled for the private vault",
+        ),
+        400,
+      );
+    }
+    const exported = repo.createVaultExport(username, parsed.data);
+    if (!exported) return c.json(apiError("not_found", "User not found"), 404);
+    return c.json(exported);
+  });
+
+  app.post("/v1/vault/imports/preview", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = vaultImportPreviewInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid vault import preview payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    }
+    const result = repo.previewVaultImport(
+      username,
+      parsed.data.payload,
+      parsed.data.recoveryPassphrase,
+    );
+    return jsonResponse(result.response, result.status);
+  });
+
+  app.post("/v1/vault/imports", async (c) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username)
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = vaultImportPreviewInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        apiError(
+          "invalid_payload",
+          "Invalid vault import payload",
+          parsed.error.issues,
+        ),
+        400,
+      );
+    }
+    const result = repo.importVault(
+      username,
+      parsed.data.payload,
+      parsed.data.recoveryPassphrase,
+    );
+    return jsonResponse(result.response, result.status);
   });
 
   app.post("/v1/local/preview", async (c) => {
@@ -834,6 +932,45 @@ function serializeCookie(
   ]
     .filter(Boolean)
     .join("; ");
+}
+
+function resolveCorsOrigin(origin: string) {
+  if (!origin) return undefined;
+  if (allowedCorsOrigins().has(origin) || isLocalhostOrigin(origin)) {
+    return origin;
+  }
+  return undefined;
+}
+
+function allowedCorsOrigins() {
+  return new Set(
+    [
+      process.env.APP_URL,
+      process.env.WEB_URL,
+      process.env.NEXT_PUBLIC_APP_URL,
+      process.env.TOKSYNC_ALLOWED_ORIGINS,
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://localhost:3001",
+      "http://127.0.0.1:3001",
+    ]
+      .filter((value): value is string => Boolean(value))
+      .flatMap((value) => value.split(","))
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+}
+
+function isLocalhostOrigin(origin: string) {
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function filtersFromUrl(url: string): DashboardFilters {

@@ -112,6 +112,16 @@ export interface PublicGraphModel {
   points: PublicGraphPoint[];
 }
 
+export interface SourceParityRow {
+  id: string;
+  label: string;
+  lane: string;
+  status: "live" | "watch" | "backlog";
+  statusLabel: string;
+  coverage: string;
+  detail: string;
+}
+
 const RECEIPT_UPLOADED_FIELDS = [
   "schemaVersion",
   "runId",
@@ -186,6 +196,145 @@ export function buildSourceHealthRows({
         "Radar stays private. Public profile and README embeds never expose local path state.",
     };
   });
+}
+
+export function buildSourceParityRows({
+  summary,
+  latestRun,
+}: {
+  summary?: DashboardSummary | null;
+  latestRun?: SyncRun | null | undefined;
+}): SourceParityRow[] {
+  const registryById = new Map(
+    SOURCE_REGISTRY.map((source) => [source.id, source] as const),
+  );
+  const topSources = summary?.topSources ?? [];
+  const latestSummary = latestRun?.sourceSummary ?? {};
+
+  return [
+    {
+      id: "cursor",
+      label: "Cursor",
+      lane: "collector parity",
+      status: parityStatus({
+        hasLane: registryById.has("cursor"),
+        latestCount: Number(latestSummary.cursor ?? 0),
+        historicalCount: topSources.find((row) => row.key === "cursor")?.tokens,
+      }),
+      statusLabel: registryById.has("cursor")
+        ? parityLabel({
+            latestCount: Number(latestSummary.cursor ?? 0),
+            historicalCount: topSources.find((row) => row.key === "cursor")
+              ?.tokens,
+          })
+        : "backlog",
+      coverage: registryById.has("cursor")
+        ? `Registry roots: ${registryById.get("cursor")?.defaultRelativePaths.join(", ")}`
+        : "No Cursor collector id exists in the current source registry.",
+      detail: registryById.has("cursor")
+        ? "Parses Tokscale-style Cursor usage CSV caches, including usage.csv and usage.<account>.csv, without uploading account labels."
+        : "Web can only show live freshness and mix once a dedicated collector lane lands.",
+    },
+    {
+      id: "copilot",
+      label: "Copilot",
+      lane: "collector parity",
+      status: parityStatus({
+        hasLane: registryById.has("copilot"),
+        latestCount: Number(latestSummary.copilot ?? 0),
+        historicalCount: topSources.find((row) => row.key === "copilot")
+          ?.tokens,
+      }),
+      statusLabel: registryById.has("copilot")
+        ? parityLabel({
+            latestCount: Number(latestSummary.copilot ?? 0),
+            historicalCount: topSources.find((row) => row.key === "copilot")
+              ?.tokens,
+          })
+        : "backlog",
+      coverage: registryById.has("copilot")
+        ? `Registry roots: ${registryById.get("copilot")?.defaultRelativePaths.join(", ")}`
+        : "Current web surface has Merge Copilot governance, but no Copilot collector id yet.",
+      detail: registryById.has("copilot")
+        ? "Parses Copilot OTEL JSONL spans/events from .copilot/otel and COPILOT_OTEL_FILE_EXPORTER_PATH while keeping prompt bodies out."
+        : "Merge summaries stay private and replay-safe; source ingestion parity is still separate work.",
+    },
+    {
+      id: "gemini",
+      label: "Gemini",
+      lane: "collector parity",
+      status: parityStatus({
+        hasLane: registryById.has("gemini"),
+        latestCount: Number(latestSummary.gemini ?? 0),
+        historicalCount: topSources.find((row) => row.key === "gemini")?.tokens,
+      }),
+      statusLabel: registryById.has("gemini")
+        ? parityLabel({
+            latestCount: Number(latestSummary.gemini ?? 0),
+            historicalCount: topSources.find((row) => row.key === "gemini")
+              ?.tokens,
+          })
+        : "backlog",
+      coverage: registryById.has("gemini")
+        ? `Registry roots: ${registryById.get("gemini")?.defaultRelativePaths.join(", ")}`
+        : "Gemini is not represented in the current source registry.",
+      detail: registryById.has("gemini")
+        ? "Parses Gemini CLI tmp chat JSON/JSONL session files with Google provider attribution and duplicate message replacement."
+        : "Parity remains blocked on a dedicated collector and stable dedup semantics.",
+    },
+    {
+      id: "openclaw",
+      label: "OpenClaw",
+      lane: "collector parity",
+      status: parityStatus({
+        hasLane: registryById.has("openclaw"),
+        latestCount: Number(latestSummary.openclaw ?? 0),
+        historicalCount: topSources.find((row) => row.key === "openclaw")
+          ?.tokens,
+      }),
+      statusLabel: registryById.has("openclaw")
+        ? parityLabel({
+            latestCount: Number(latestSummary.openclaw ?? 0),
+            historicalCount: topSources.find((row) => row.key === "openclaw")
+              ?.tokens,
+          })
+        : "backlog",
+      coverage: registryById.has("openclaw")
+        ? `Registry roots: ${registryById.get("openclaw")?.defaultRelativePaths.join(", ")}`
+        : "OpenClaw is not represented in the current source registry.",
+      detail: registryById.has("openclaw")
+        ? "Parses OpenClaw sessions.json indexes, transcript JSONL archives, model snapshots, and SDK usage records."
+        : "Once a registry id exists, this page can reuse the same source health and mix tables.",
+    },
+    {
+      id: "headless",
+      label: "Headless",
+      lane: "transport parity",
+      status: "live",
+      statusLabel: "live",
+      coverage:
+        "Private sync already supports user API tokens and headless device identities.",
+      detail: latestRun
+        ? `Latest sync summary: ${formatSourceSummary(latestRun.sourceSummary)}`
+        : "No completed sync yet. Headless transport is ready once a token-backed agent submits usage.",
+    },
+    {
+      id: "registry",
+      label: "Current registry",
+      lane: "live collectors",
+      status: "live",
+      statusLabel: "live",
+      coverage: `${SOURCE_REGISTRY.length} built-in collectors: ${SOURCE_REGISTRY.map(
+        (source) => source.displayName,
+      ).join(", ")}`,
+      detail:
+        topSources.length > 0
+          ? `Current mix: ${topSources
+              .map((row) => `${row.key}:${row.tokens}`)
+              .join(" | ")}`
+          : "No source usage has been synced into the current dashboard yet.",
+    },
+  ];
 }
 
 export function buildMergeCopilot({
@@ -376,6 +525,32 @@ export function formatSourceSummary(
   const pairs = Object.entries(sourceSummary);
   if (pairs.length === 0) return "none";
   return pairs.map(([source, count]) => `${source}:${count}`).join(" | ");
+}
+
+function parityStatus({
+  hasLane,
+  latestCount,
+  historicalCount,
+}: {
+  hasLane: boolean;
+  latestCount: number;
+  historicalCount?: number | undefined;
+}): SourceParityRow["status"] {
+  if (!hasLane) return "backlog";
+  if (latestCount > 0) return "live";
+  return historicalCount ? "watch" : "watch";
+}
+
+function parityLabel({
+  latestCount,
+  historicalCount,
+}: {
+  latestCount: number;
+  historicalCount?: number | undefined;
+}): SourceParityRow["statusLabel"] {
+  if (latestCount > 0) return "live mix";
+  if (historicalCount) return "historical only";
+  return "registry ready";
 }
 
 function escapeCsv(value: string) {

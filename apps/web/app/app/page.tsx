@@ -5,6 +5,7 @@ import {
 } from "@toksync/shared";
 import {
   Activity,
+  Archive,
   CalendarDays,
   Clock3,
   Coins,
@@ -28,6 +29,7 @@ import {
   buildPrivacyReceipt,
   buildSourceHealthRows,
 } from "../../lib/v02";
+import { normalizeVaultExports } from "../../lib/vault-ui";
 import { BreakdownPanel } from "../../components/BreakdownPanel";
 import { CostGuardrailsPanel } from "../../components/CostGuardrailsPanel";
 import { MergeCopilotPanel } from "../../components/MergeCopilotPanel";
@@ -38,14 +40,21 @@ import { SourceHealthRadar } from "../../components/SourceHealthRadar";
 export const dynamic = "force-dynamic";
 
 export default async function AppDashboardPage() {
-  const [summary, daily, syncRuns, publicProfile, guardrailsResult] =
-    await Promise.all([
-      apiGet<DashboardSummary>("/v1/dashboard/summary"),
-      apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
-      apiGet<SyncRunsResponse>("/v1/sync-runs"),
-      apiGet<PublicProfileState>("/v1/public-profile"),
-      loadGuardrailsOverview(),
-    ]);
+  const [
+    summary,
+    daily,
+    syncRuns,
+    publicProfile,
+    guardrailsResult,
+    vaultResult,
+  ] = await Promise.all([
+    apiGet<DashboardSummary>("/v1/dashboard/summary"),
+    apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
+    apiGet<SyncRunsResponse>("/v1/sync-runs"),
+    apiGet<PublicProfileState>("/v1/public-profile"),
+    loadGuardrailsOverview(),
+    loadVaultOverview(),
+  ]);
   const totals = summary?.totals ?? {
     tokens: 0,
     costUsd: 0,
@@ -110,6 +119,7 @@ export default async function AppDashboardPage() {
   });
   const receipt = buildPrivacyReceipt({ summary, latestRun });
   const sourceHealth = buildSourceHealthRows({ summary, latestRun });
+  const latestVaultExport = vaultResult.exports[0];
 
   return (
     <div className="grid">
@@ -140,6 +150,10 @@ export default async function AppDashboardPage() {
           <a className="btn" href="/app/exports">
             <ExternalLink size={16} />
             Local viewer
+          </a>
+          <a className="btn" href="/app/vault">
+            <Archive size={16} />
+            Usage vault
           </a>
           <a className="btn" href="/app/embed">
             <ExternalLink size={16} />
@@ -306,6 +320,66 @@ export default async function AppDashboardPage() {
         </div>
       </section>
       <section className="grid grid-2">
+        <div className="card">
+          <div className="metric-row">
+            <div>
+              <h2 className="section-title">Private Usage Vault</h2>
+              <p className="muted">
+                Encrypted metrics-only backup lane for migration, offline
+                restore drills, and self-host recovery.
+              </p>
+            </div>
+            <span className={`pill ${vaultResult.available ? "good" : "warn"}`}>
+              {vaultResult.available ? "v0.4" : "contract"}
+            </span>
+          </div>
+          <div className="integrity-list">
+            <div className="integrity-row">
+              <div>
+                <strong>Ledger</strong>
+                <span>
+                  {vaultResult.exports.length > 0
+                    ? `${vaultResult.exports.length} export records available.`
+                    : "No vault export records yet."}
+                </span>
+              </div>
+              <span className="pill">
+                {latestVaultExport?.status ?? "empty"}
+              </span>
+            </div>
+            <div className="integrity-row">
+              <div>
+                <strong>Latest scope</strong>
+                <span>
+                  {latestVaultExport?.scope ??
+                    "metrics-only / receipts / public-cache optional"}
+                </span>
+              </div>
+              <span className="pill">
+                {latestVaultExport?.format ?? "toksync-vault-v1"}
+              </span>
+            </div>
+          </div>
+          <a className="btn" href="/app/vault" style={{ marginTop: 16 }}>
+            <Archive size={16} />
+            Open vault console
+          </a>
+        </div>
+        <div className="card">
+          <h2 className="section-title">Restore preview boundary</h2>
+          <div className="stack-list">
+            <span>Import preview stays dry-run and non-mutating.</span>
+            <span>
+              Restore inserts only importable metrics and skips duplicates.
+            </span>
+            <span>
+              Vault files never include prompt text, tool payloads, raw paths,
+              or token secrets.
+            </span>
+          </div>
+        </div>
+      </section>
+      <section className="grid grid-2">
         <MergeCopilotPanel items={mergeCopilot} href="/app/merge" />
         <CostGuardrailsPanel
           available={guardrailsResult.available}
@@ -366,6 +440,26 @@ async function loadGuardrailsOverview(): Promise<{
       (error.status === 404 || error.status === 501)
     ) {
       return { data: null, available: false };
+    }
+    throw error;
+  }
+}
+
+async function loadVaultOverview(): Promise<{
+  available: boolean;
+  exports: ReturnType<typeof normalizeVaultExports>;
+}> {
+  try {
+    const payload = await apiGet<{ exports: unknown[] }>("/v1/vault/exports", {
+      notFoundAsNull: false,
+    });
+    return { available: true, exports: normalizeVaultExports(payload) };
+  } catch (error) {
+    if (
+      error instanceof ApiRequestError &&
+      (error.status === 404 || error.status === 501)
+    ) {
+      return { available: false, exports: [] };
     }
     throw error;
   }

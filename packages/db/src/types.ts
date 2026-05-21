@@ -3,6 +3,7 @@ import type {
   CostGuardrailScope,
   TokenBreakdown,
   UsageEventV1,
+  VaultEncryptedPayload,
 } from "@toksync/shared";
 
 export interface UserRecord {
@@ -233,6 +234,28 @@ export interface CostAnomalyRecord {
   createdAt: string;
 }
 
+export interface VaultExportRecord {
+  id: string;
+  userId: string;
+  kind: "export" | "import_preview" | "import";
+  status: "queued" | "running" | "completed" | "failed";
+  format: "toksync-vault-v1";
+  includePublicCache: boolean;
+  includeReceipts: boolean;
+  includeContent: boolean;
+  artifactDigest?: string;
+  artifactByteSize?: number;
+  artifact?: VaultEncryptedPayload;
+  artifactStorageKey?: string;
+  eventCount: number;
+  deviceCount: number;
+  sourceCount?: number;
+  receiptCount?: number;
+  error?: string;
+  createdAt: string;
+  finishedAt?: string;
+}
+
 export interface TokSyncData {
   users: UserRecord[];
   devices: DeviceRecord[];
@@ -249,6 +272,7 @@ export interface TokSyncData {
   publicProfileStats: PublicProfileStatsRecord[];
   costGuardrailRules: CostGuardrailRuleRecord[];
   costAnomalies: CostAnomalyRecord[];
+  vaultExports: VaultExportRecord[];
 }
 
 export function emptyTokSyncData(): TokSyncData {
@@ -268,5 +292,6 @@ export function emptyTokSyncData(): TokSyncData {
     publicProfileStats: [],
     costGuardrailRules: [],
     costAnomalies: [],
+    vaultExports: [],
   };
 }

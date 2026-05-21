@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   totalTokens,
+  vaultEncryptedPayloadSchema,
+  vaultExportInputSchema,
+  vaultImportPreviewInputSchema,
   usageBatchV1Schema,
   usageEventV1Schema,
   USAGE_BATCH_MAX_EVENTS,
@@ -90,5 +93,47 @@ describe("UsageEventV1 schema", () => {
         device: { ...parsed.device, platform: "android" },
       }).success,
     ).toBe(false);
+  });
+
+  it("validates the private vault export and preview contract", () => {
+    const exportInput = vaultExportInputSchema.parse({
+      recoveryPassphrase: "portable-vault-passphrase",
+    });
+    expect(exportInput).toEqual({
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: true,
+      includeContent: false,
+      recoveryPassphrase: "portable-vault-passphrase",
+    });
+
+    const payload = vaultEncryptedPayloadSchema.parse({
+      format: "toksync-vault-v1",
+      schemaVersion: 1,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      payloadDigest: "sha256:test",
+      includes: {
+        publicCache: true,
+        receipts: true,
+        includeContent: false,
+      },
+      keyDerivation: {
+        algorithm: "scrypt",
+        salt: "salt",
+        keyLength: 32,
+      },
+      encryption: {
+        algorithm: "aes-256-gcm",
+        iv: "abc",
+        authTag: "def",
+        ciphertext: "ghi",
+      },
+    });
+    expect(
+      vaultImportPreviewInputSchema.parse({
+        payload,
+        recoveryPassphrase: "portable-vault-passphrase",
+      }).payload.payloadDigest,
+    ).toBe("sha256:test");
   });
 });

@@ -9,7 +9,11 @@ import {
   type DashboardSummary,
   type SyncRunsResponse,
 } from "../../../lib/api";
-import { buildSourceHealthRows, formatSourceSummary } from "../../../lib/v02";
+import {
+  buildSourceHealthRows,
+  buildSourceParityRows,
+  formatSourceSummary,
+} from "../../../lib/v02";
 import { SourceHealthRadar } from "../../../components/SourceHealthRadar";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +27,7 @@ export default async function SourcesPage() {
   const rows = breakdowns?.sources ?? [];
   const latestRun = syncRuns?.runs?.[0];
   const radarRows = buildSourceHealthRows({ summary, latestRun });
+  const parityRows = buildSourceParityRows({ summary, latestRun });
 
   return (
     <div className="grid">
@@ -94,6 +99,45 @@ export default async function SourcesPage() {
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="card">
+        <div className="metric-row">
+          <div>
+            <h2 className="section-title">Parity watchlist</h2>
+            <p className="muted">
+              Track which Tokscale-adjacent source lanes have concrete local log
+              formats, registry roots, and live synced usage. Format drift stays
+              visible as hardening work instead of being hidden behind a broad
+              parity label.
+            </p>
+          </div>
+          <span className="pill warn">v0.4</span>
+        </div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Surface</th>
+                <th>Lane</th>
+                <th>Status</th>
+                <th>Coverage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parityRows.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.label}</td>
+                  <td>{row.lane}</td>
+                  <td>{row.statusLabel}</td>
+                  <td>
+                    <div>{row.coverage}</div>
+                    <div className="table-subtle">{row.detail}</div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

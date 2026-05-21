@@ -167,6 +167,7 @@ function hydrateTokSyncData(data: TokSyncData): TokSyncData {
     ).map(hydratePublicProfileStats),
     costGuardrailRules: data.costGuardrailRules ?? empty.costGuardrailRules,
     costAnomalies: data.costAnomalies ?? empty.costAnomalies,
+    vaultExports: data.vaultExports ?? empty.vaultExports,
   };
 }
 

@@ -5,7 +5,8 @@
 <h1 align="center">TokSync</h1>
 
 <p align="center">
-  Private-first AI coding usage sync for Codex CLI, Claude Code, and OpenCode.
+  Private-first AI coding usage sync for Codex CLI, Claude Code, OpenCode,
+  Cursor, Copilot, Gemini CLI, and OpenClaw.
   Metrics move across devices; prompts, replies, tool output, secrets, and raw
   project paths do not.
 </p>
@@ -21,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img alt="stage" src="https://img.shields.io/badge/stage-v0.3-0f7b59?style=flat-square" />
+  <img alt="stage" src="https://img.shields.io/badge/stage-v0.4-0f7b59?style=flat-square" />
   <img alt="payload" src="https://img.shields.io/badge/payload-metrics--only-315fbd?style=flat-square" />
   <img alt="public data" src="https://img.shields.io/badge/public%20data-opt--in-b66f09?style=flat-square" />
   <img alt="package manager" src="https://img.shields.io/badge/pnpm-9.15.9-f69220?style=flat-square" />
@@ -29,7 +30,7 @@
 
 ## What TokSync Is
 
-TokSync v0.3 is a local-first telemetry hub for AI coding tools. It aggregates
+TokSync v0.4 is a local-first telemetry hub for AI coding tools. It aggregates
 token counts, approximate cost, model, source, device, and workspace-label usage
 across machines while keeping private content out of the sync payload.
 
@@ -45,15 +46,15 @@ only, with no source/model subboards.
 
 ## Current Console
 
-| Surface            | Current behavior                                                                                      |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                       |
-| Collectors         | Codex CLI, Claude Code, and OpenCode-style JSON/JSONL fixtures                                        |
-| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                              |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard                       |
-| Public output      | README badge/profile-card SVG from public aggregate cache only                                        |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                        |
+| Surface            | Current behavior                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                                     |
+| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs |
+| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault        |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                            |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault                        |
+| Public output      | README badge/profile-card SVG from public aggregate cache only                                                      |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                      |
 
 ## Quick Start
 
@@ -115,7 +116,9 @@ packages/
 
 The active local store is `FileTokSyncStore`, controlled by `TOKSYNC_DB_FILE`.
 `packages/db/migrations/0001_v0_1_metrics.sql` is the current forward SQL shape
-for the hosted Postgres target.
+for the hosted Postgres target, including the `vault_exports` ledger. Vault
+artifacts stay inline in the local file store by default, or can be written to a
+private object directory with `TOKSYNC_VAULT_ARTIFACT_DIR`.
 
 ## Privacy Contract
 
@@ -132,14 +135,18 @@ for the hosted Postgres target.
   leaderboard output.
 - Leaderboard participation requires public profile plus a second explicit
   opt-in, reads public aggregate cache only, and is global-only.
-- Content sync, search, eval export, vault, and proof-pack workflows are future
-  opt-in features, not current behavior.
+- Private Usage Vault encrypts metrics-only artifacts with a user recovery
+  passphrase; exports can be downloaded and imported across instances with
+  idempotent duplicate handling.
+- Content sync, search, eval export, and proof-pack workflows are future opt-in
+  features, not current behavior.
 
 ## Roadmap Boundaries
 
 The external specs track Tokscale parity and TokSync-specific governance
-features. The v0.2 private governance slice is implemented locally, and v0.3
-adds the first cost-governance and public leaderboard cut:
+features. The v0.2 private governance slice is implemented locally, v0.3 adds
+the first cost-governance and public leaderboard cut, and v0.4 adds a portable
+metrics vault plus real-format source parity adapters:
 
 | Phase | Planned capability   | Boundary                                                                                      |
 | ----- | -------------------- | --------------------------------------------------------------------------------------------- |
@@ -152,11 +159,13 @@ adds the first cost-governance and public leaderboard cut:
 | v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                      |
 | v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                 |
 | v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                           |
-| v0.4  | Private Usage Vault  | Encrypted metrics backup and restore                                                          |
+| v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing  |
+| v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import        |
 | v0.5  | Public Proof Pack    | Low-sensitivity public proof from aggregates                                                  |
 
 Billing, subscriptions, payment providers, plan limits, billing UI, content
-sync, search, eval export, and Private Usage Vault remain out of scope.
+sync, search, eval export, proof pack, and source/model leaderboard subboards
+remain out of scope.
 
 ## Useful Commands
 

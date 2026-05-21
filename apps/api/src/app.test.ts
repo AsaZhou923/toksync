@@ -170,6 +170,27 @@ function cookieHeader(setCookie: string | null, name: string) {
 }
 
 describe("TokSync API", () => {
+  it("allows credentialed localhost browser clients without wildcard CORS", async () => {
+    const { api } = testContext();
+
+    const response = await api.request("/v1/vault/exports", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3001",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type,X-TokSync-User",
+      },
+    });
+
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+      "http://localhost:3001",
+    );
+    expect(response.headers.get("Access-Control-Allow-Credentials")).toBe(
+      "true",
+    );
+    expect(response.headers.get("Access-Control-Allow-Origin")).not.toBe("*");
+  });
+
   it("does not trust dev user headers when dev auth is disabled", async () => {
     const { api, repo } = lockedContext();
     repo.ensureUser("alice");
@@ -1107,6 +1128,132 @@ describe("TokSync API", () => {
     expect(combined).not.toContain("tokenHash");
     expect(combined).not.toContain("prompt");
     expect(combined).not.toContain("toolArguments");
+  });
+
+  it("creates private encrypted vault exports and previews imports without mutating metrics", async () => {
+    const { api } = testContext();
+    const { api: lockedApi } = lockedContext();
+    const recoveryPassphrase = "portable-vault-passphrase";
+    const auth = await connectDevice(api);
+    await postBatch(
+      api,
+      auth.deviceToken,
+      usageBatch(auth.deviceId, [
+        usageEvent(auth.deviceId, {
+          workspaceKeyHash: "sha256:vault-workspace",
+          workspaceLabel: "source",
+          sourceSessionId: "vault-session-id",
+          sourceMessageId: "vault-message-id",
+          dedupKey: "codex:vault-api-event",
+        }),
+      ]),
+    );
+
+    expect((await lockedApi.request("/v1/vault/exports")).status).toBe(401);
+
+    const created = await json<any>(
+      await api.request("/v1/vault/exports", {
+        method: "POST",
+        body: JSON.stringify({
+          format: "toksync-vault-v1",
+          includePublicCache: true,
+          includeReceipts: true,
+          includeContent: false,
+          recoveryPassphrase,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-TokSync-User": "demo",
+        },
+      }),
+    );
+    expect(created.export.payloadDigest).toMatch(/^sha256:/);
+    const encrypted = JSON.stringify(created.payload);
+    expect(encrypted).not.toContain("vault-session-id");
+    expect(encrypted).not.toContain("vault-message-id");
+    expect(encrypted).not.toContain(auth.deviceId);
+
+    const listed = await json<any>(
+      await api.request("/v1/vault/exports", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    expect(listed.exports).toEqual([
+      expect.objectContaining({
+        id: created.export.id,
+        format: "toksync-vault-v1",
+        eventCount: 1,
+      }),
+    ]);
+
+    const artifact = await json<any>(
+      await api.request(`/v1/vault/exports/${created.export.id}`, {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    expect(artifact.payload).toEqual(created.payload);
+
+    const preview = await json<any>(
+      await api.request("/v1/vault/imports/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          payload: created.payload,
+          recoveryPassphrase,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-TokSync-User": "demo",
+        },
+      }),
+    );
+    expect(preview).toMatchObject({
+      format: "toksync-vault-v1",
+      eventCount: 1,
+      importableEvents: 0,
+      duplicateEvents: 1,
+      deviceCount: 1,
+      receiptCount: 1,
+      sourceSummary: { codex: 1 },
+    });
+    expect(
+      (
+        await json<any>(
+          await api.request("/v1/dashboard/summary", {
+            headers: { "X-TokSync-User": "demo" },
+          }),
+        )
+      ).totals.tokens,
+    ).toBe(157);
+
+    const { api: targetApi } = testContext();
+    const imported = await json<any>(
+      await targetApi.request("/v1/vault/imports", {
+        method: "POST",
+        body: JSON.stringify({
+          payload: created.payload,
+          recoveryPassphrase,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-TokSync-User": "demo",
+        },
+      }),
+    );
+    expect(imported).toMatchObject({
+      eventCount: 1,
+      importedEvents: 1,
+      duplicateEvents: 0,
+      sourceSummary: { codex: 1 },
+    });
+    expect(
+      (
+        await json<any>(
+          await targetApi.request("/v1/dashboard/summary", {
+            headers: { "X-TokSync-User": "demo" },
+          }),
+        )
+      ).totals.tokens,
+    ).toBe(157);
   });
 
   it("deletes submitted public data without deleting private metrics", async () => {

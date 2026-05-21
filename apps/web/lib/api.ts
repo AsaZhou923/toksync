@@ -73,6 +73,28 @@ export interface SyncRunsResponse {
   runs: SyncRun[];
 }
 
+export interface VaultExportSummary {
+  id: string;
+  kind: "export" | "import_preview" | "import" | string;
+  status: string;
+  format: "toksync-vault-v1" | string;
+  includePublicCache: boolean;
+  includeReceipts: boolean;
+  includeContent: boolean;
+  payloadDigest?: string;
+  artifactByteSize?: number;
+  eventCount: number;
+  deviceCount: number;
+  sourceCount?: number;
+  receiptCount?: number;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface VaultExportsResponse {
+  exports: VaultExportSummary[];
+}
+
 export interface PublicProfileState {
   enabled: boolean;
   showCost: boolean;

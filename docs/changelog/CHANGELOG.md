@@ -2,6 +2,93 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-20-v0-4-source-parity-vault"></a>
+
+## 2026-05-20 - v0.4 source parity and private vault
+
+日期：2026-05-20
+
+本次更新完成 v0.4 第一版：扩展 Tokscale-adjacent source registry，新增 Private Usage Vault 的 passphrase 加密导出、artifact 取回、import preview 和幂等恢复闭环，并同步仓库 README 与外部 specs。
+
+## 概览
+
+- Source registry 新增 Cursor、GitHub Copilot、Gemini CLI 和 OpenClaw，collector 支持 Cursor usage CSV、Copilot OTEL JSONL、Gemini tmp chats 和 OpenClaw sessions/transcript/SDK usage 真实格式。
+- 未知 pricing 的 model 不再被估算为准确成本，Gemini model 归属到 `google` provider。
+- 新增 `/app/vault` 和 dashboard/docs 入口，提供 vault ledger、artifact 下载、import preview 和 restore controls。
+- 新增 `GET /v1/vault/exports`、`POST /v1/vault/exports`、`GET /v1/vault/exports/:id`、`POST /v1/vault/imports/preview` 和 `POST /v1/vault/imports`。
+- Vault artifact 使用用户 recovery passphrase 派生密钥加密，preview 不写库，import 只插入当前用户缺失的 metrics events 并跳过重复事件。
+- Playwright E2E/visual runner 改为显式管理 API/Web 服务生命周期，避免连续运行 full gate 时 3300/4300 端口残留。
+
+## 隐私 / 边界
+
+- Vault 仍是 metrics-only：不导出 prompt、assistant reply、tool args、tool output、file content、raw path、plaintext token 或 secrets。
+- `includeContent` 保持关闭，内容同步、搜索、eval export 和 Public Proof Pack 仍为后续 opt-in 能力。
+- Source parity 第一版已前滚为四个真实格式适配；真实工具格式漂移 fixture 和 pricing refresh 继续作为后续加固项。
+
+## 影响文件
+
+### Apps
+
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/web/app/app/page.tsx`
+- `apps/web/app/app/sources/page.tsx`
+- `apps/web/app/app/exports/page.tsx`
+- `apps/web/app/app/vault/page.tsx`
+- `apps/web/app/docs/page.tsx`
+- `apps/web/app/docs/sources/page.tsx`
+- `apps/web/components/VaultConsole.tsx`
+- `apps/web/lib/api.ts`
+- `apps/web/lib/v02.ts`
+- `apps/web/lib/v02.test.ts`
+- `apps/web/lib/vault-ui.ts`
+
+### Packages
+
+- `packages/shared/src/schemas.ts`
+- `packages/shared/src/schemas.test.ts`
+- `packages/shared/src/source-registry.ts`
+- `packages/collector-core/src/index.ts`
+- `packages/collector-core/src/index.test.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/db/src/schema.ts`
+- `packages/db/src/store.ts`
+- `packages/db/src/types.ts`
+- `packages/db/src/vault-postgres.ts`
+- `packages/db/migrations/0001_v0_1_metrics.sql`
+- `tests/visual/embed.visual.spec.ts`
+- `package.json`
+- `playwright.config.ts`
+- `scripts/run-playwright.mjs`
+- `scripts/playwright-web-server.mjs`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\TokSync.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\overview.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\prd.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\architecture.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\api-design.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\database-design.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\sitemap.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\testing.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\09 - Changelog\Update Logs\CHANGELOG.md`
+
+## 验证
+
+- `pnpm exec vitest run packages/shared/src/schemas.test.ts packages/db/src/repository.test.ts apps/api/src/app.test.ts apps/web/lib/v02.test.ts`
+- `pnpm typecheck`
+- `pnpm test:e2e`
+- `pnpm test:visual`
+- `pnpm test:full`
+- drift scan for stale `generic metrics`, `通用 JSON`, old Postgres vault migration wording, and obsolete `tsu_` contract language
+
 <a id="2026-05-19-hosted-auth-public-boundary-alignment"></a>
 
 ## 2026-05-19 - hosted auth public boundary alignment

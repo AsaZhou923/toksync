@@ -1,13 +1,73 @@
-import { mkdtempSync } from "node:fs";
+import {
+  createCipheriv,
+  createHash,
+  randomBytes,
+  scryptSync,
+} from "node:crypto";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { FileTokSyncStore } from "./store";
-import { TokSyncRepository } from "./repository";
+import { FileVaultArtifactStore, TokSyncRepository } from "./repository";
+import { PostgresVaultExportRepository } from "./vault-postgres";
+import type { VaultExportRecord } from "./types";
+
+class FakeVaultDb {
+  rows: any[] = [];
+
+  select() {
+    const query = {
+      from: () => query,
+      where: () => query,
+      orderBy: () => Promise.resolve(this.rows),
+      then: (resolve: (rows: any[]) => unknown) =>
+        Promise.resolve(this.rows).then(resolve),
+    };
+    return query;
+  }
+
+  insert() {
+    return {
+      values: (row: any) => {
+        this.rows.push(row);
+        return Promise.resolve();
+      },
+    };
+  }
+}
+
+class FakeVaultArtifactStore {
+  payloads = new Map<string, any>();
+
+  put({
+    userId,
+    exportId,
+    payload,
+  }: {
+    userId: string;
+    exportId: string;
+    payload: any;
+  }) {
+    const key = `vault/${userId}/${exportId}.json`;
+    this.payloads.set(key, payload);
+    return key;
+  }
+
+  get(storageKey: string) {
+    return this.payloads.get(storageKey) ?? null;
+  }
+}
 
 function createRepo() {
+  return createRepoWithStore().repo;
+}
+
+function createRepoWithStore() {
   const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
-  return new TokSyncRepository(new FileTokSyncStore(path.join(dir, "db.json")));
+  const file = path.join(dir, "db.json");
+  const store = new FileTokSyncStore(file);
+  return { repo: new TokSyncRepository(store), store, file };
 }
 
 function authorizeDevice(repo: TokSyncRepository, username = "demo") {
@@ -319,6 +379,357 @@ describe("TokSyncRepository", () => {
     expect(repo.dashboardSummary("demo")?.totals.messages).toBe(1);
     expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(150);
     expect(repo.dashboardSummary("demo")?.totals.costUsd).toBe(0.01);
+  });
+
+  it("creates encrypted vault exports and previews importability without mutating events", () => {
+    const { repo, store, file } = createRepoWithStore();
+    const auth = authorizeDevice(repo);
+    const recoveryPassphrase = "portable-vault-passphrase";
+    const secretPath = "C:/Users/alice/private-client/source";
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          workspaceLabel: "source",
+          workspaceKeyHash: "sha256:private-workspace",
+          sourceSessionId: "private-session-id",
+          sourceMessageId: "private-message-id",
+          dedupKey: "codex:vault-export-event",
+        }),
+      ],
+      "vault-run",
+    );
+
+    const created = repo.createVaultExport("demo", {
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: true,
+      includeContent: false,
+      recoveryPassphrase,
+    });
+
+    expect(created).not.toBeNull();
+    expect(created?.export.payloadDigest).toMatch(/^sha256:/);
+    expect(created?.payload.format).toBe("toksync-vault-v1");
+    const encrypted = JSON.stringify(created?.payload);
+    expect(encrypted).not.toContain(secretPath);
+    expect(encrypted).not.toContain("private-session-id");
+    expect(encrypted).not.toContain("private-message-id");
+    expect(repo.listVaultExports("demo")).toEqual([
+      expect.objectContaining({
+        id: created?.export.id,
+        format: "toksync-vault-v1",
+        eventCount: 1,
+      }),
+    ]);
+    expect(
+      repo.getVaultExport("demo", created?.export.id ?? "")?.payload,
+    ).toEqual(created?.payload);
+    expect(store.read().vaultExports).toHaveLength(1);
+    const reloadedRepo = new TokSyncRepository(new FileTokSyncStore(file));
+    expect(
+      reloadedRepo.getVaultExport("demo", created?.export.id ?? "")?.payload,
+    ).toEqual(created?.payload);
+
+    const preview = repo.previewVaultImport(
+      "demo",
+      created?.payload,
+      recoveryPassphrase,
+    );
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("vault preview failed");
+    expect(preview.response).toMatchObject({
+      format: "toksync-vault-v1",
+      eventCount: 1,
+      importableEvents: 0,
+      duplicateEvents: 1,
+      deviceCount: 1,
+      receiptCount: 1,
+      sourceSummary: { codex: 1 },
+    });
+    expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(157);
+    expect(store.read().vaultExports).toHaveLength(1);
+
+    const target = createRepo();
+    const targetPreview = target.previewVaultImport(
+      "demo",
+      created?.payload,
+      recoveryPassphrase,
+    );
+    expect(targetPreview.ok).toBe(true);
+    if (!targetPreview.ok) throw new Error("target preview failed");
+    expect(targetPreview.response).toMatchObject({
+      eventCount: 1,
+      importableEvents: 1,
+      duplicateEvents: 0,
+    });
+    const imported = target.importVault(
+      "demo",
+      created?.payload,
+      recoveryPassphrase,
+    );
+    expect(imported.ok).toBe(true);
+    if (!imported.ok) throw new Error("vault import failed");
+    expect(imported.response).toMatchObject({
+      eventCount: 1,
+      importedEvents: 1,
+      duplicateEvents: 0,
+      sourceSummary: { codex: 1 },
+    });
+    expect(target.dashboardSummary("demo")?.totals.tokens).toBe(157);
+  });
+
+  it("creates an empty encrypted vault export for an authenticated user without prior metrics", () => {
+    const repo = createRepo();
+
+    const created = repo.createVaultExport("demo", {
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: true,
+      includeContent: false,
+      recoveryPassphrase: "portable-vault-passphrase",
+    });
+
+    expect(created).not.toBeNull();
+    expect(created?.export.eventCount).toBe(0);
+    expect(repo.listVaultExports("demo")).toHaveLength(1);
+  });
+
+  it("stores vault artifacts through a hosted artifact store and keeps the ledger durable", () => {
+    const { store, file } = createRepoWithStore();
+    const artifactDir = mkdtempSync(path.join(tmpdir(), "toksync-vault-"));
+    const artifactStore = new FileVaultArtifactStore(artifactDir);
+    const repo = new TokSyncRepository(store, undefined, artifactStore);
+    const auth = authorizeDevice(repo);
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          dedupKey: "codex:hosted-vault-artifact",
+        }),
+      ],
+      "hosted-vault-run",
+    );
+
+    const created = repo.createVaultExport("demo", {
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: true,
+      includeContent: false,
+      recoveryPassphrase: "portable-vault-passphrase",
+    });
+    const ledgerRecord = store.read().vaultExports[0];
+
+    expect(ledgerRecord?.artifact).toBeUndefined();
+    expect(ledgerRecord?.artifactStorageKey).toMatch(/^vault\/.+\/.+\.json$/);
+    expect(
+      repo.getVaultExport("demo", created?.export.id ?? "")?.payload,
+    ).toEqual(created?.payload);
+    if (!ledgerRecord?.artifactStorageKey) {
+      throw new Error("missing hosted artifact storage key");
+    }
+    expect(
+      existsSync(
+        path.join(artifactDir, ...ledgerRecord.artifactStorageKey.split("/")),
+      ),
+    ).toBe(true);
+
+    const reloadedRepo = new TokSyncRepository(
+      new FileTokSyncStore(file),
+      undefined,
+      new FileVaultArtifactStore(artifactDir),
+    );
+    expect(
+      reloadedRepo.getVaultExport("demo", created?.export.id ?? "")?.payload,
+    ).toEqual(created?.payload);
+  });
+
+  it("maps vault ledger rows through the Postgres repository adapter", async () => {
+    const db = new FakeVaultDb();
+    const repo = new PostgresVaultExportRepository(db);
+    const artifact = {
+      format: "toksync-vault-v1" as const,
+      schemaVersion: 1 as const,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      payloadDigest: "sha256:vault-digest",
+      includes: {
+        publicCache: true,
+        receipts: true,
+        includeContent: false,
+      },
+      keyDerivation: {
+        algorithm: "scrypt" as const,
+        salt: "salt",
+        keyLength: 32 as const,
+      },
+      encryption: {
+        algorithm: "aes-256-gcm" as const,
+        iv: "iv",
+        authTag: "tag",
+        ciphertext: "ciphertext",
+      },
+    };
+    const record: VaultExportRecord = {
+      id: "11111111-1111-4111-8111-111111111111",
+      userId: "22222222-2222-4222-8222-222222222222",
+      kind: "export",
+      status: "completed",
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: true,
+      includeContent: false,
+      artifactDigest: artifact.payloadDigest,
+      artifactByteSize: 512,
+      artifactStorageKey: "vault/user/export.json",
+      artifact,
+      eventCount: 2,
+      deviceCount: 1,
+      sourceCount: 1,
+      receiptCount: 1,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      finishedAt: "2026-05-20T00:00:01.000Z",
+    };
+
+    await repo.insert(record);
+
+    expect(db.rows[0]).toMatchObject({
+      id: record.id,
+      userId: record.userId,
+      artifactStorageKey: "vault/user/export.json",
+      artifact,
+    });
+    await expect(repo.listExports(record.userId)).resolves.toEqual([record]);
+    await expect(repo.getExport(record.userId, record.id)).resolves.toEqual(
+      record,
+    );
+  });
+
+  it("writes and reads hosted vault artifacts through the Postgres adapter", async () => {
+    const db = new FakeVaultDb();
+    const artifactStore = new FakeVaultArtifactStore();
+    const repo = new PostgresVaultExportRepository(db, artifactStore);
+    const artifact = {
+      format: "toksync-vault-v1" as const,
+      schemaVersion: 1 as const,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      payloadDigest: "sha256:hosted-vault-digest",
+      includes: {
+        publicCache: true,
+        receipts: false,
+        includeContent: false,
+      },
+      keyDerivation: {
+        algorithm: "scrypt" as const,
+        salt: "salt",
+        keyLength: 32 as const,
+      },
+      encryption: {
+        algorithm: "aes-256-gcm" as const,
+        iv: "iv",
+        authTag: "tag",
+        ciphertext: "ciphertext",
+      },
+    };
+    const record: VaultExportRecord = {
+      id: "33333333-3333-4333-8333-333333333333",
+      userId: "44444444-4444-4444-8444-444444444444",
+      kind: "export",
+      status: "completed",
+      format: "toksync-vault-v1",
+      includePublicCache: true,
+      includeReceipts: false,
+      includeContent: false,
+      eventCount: 0,
+      deviceCount: 0,
+      sourceCount: 0,
+      receiptCount: 0,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      finishedAt: "2026-05-20T00:00:00.000Z",
+    };
+    const artifactStorageKey = `vault/${record.userId}/${record.id}.json`;
+    const artifactByteSize = Buffer.byteLength(JSON.stringify(artifact));
+
+    await repo.insertExportWithArtifact(record, artifact);
+
+    expect(db.rows[0]).toMatchObject({
+      id: record.id,
+      userId: record.userId,
+      artifact: undefined,
+      artifactDigest: artifact.payloadDigest,
+      artifactStorageKey,
+      artifactByteSize,
+    });
+    await expect(
+      repo.getExportArtifact(record.userId, record.id),
+    ).resolves.toEqual({
+      export: {
+        ...record,
+        artifactDigest: artifact.payloadDigest,
+        artifactStorageKey,
+        artifactByteSize,
+      },
+      payload: artifact,
+      payloadDigest: artifact.payloadDigest,
+    });
+  });
+
+  it("rejects vault payloads that violate the metrics-only privacy guard", () => {
+    const repo = createRepo();
+    const recoveryPassphrase = "portable-vault-passphrase";
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = scryptSync(recoveryPassphrase, salt, 32);
+    const snapshot = {
+      format: "toksync-vault-v1",
+      schemaVersion: 1,
+      prompt: "should never import",
+      metrics: {
+        events: [
+          usageEvent("device-1", "2026-02-03", 0.01, {
+            dedupKey: "codex:malicious-vault",
+          }),
+        ],
+      },
+      devices: [{ id: "device-1", platform: "windows" }],
+    };
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(snapshot), "utf8"),
+      cipher.final(),
+    ]);
+    const authTag = cipher.getAuthTag();
+    const payloadDigest = `sha256:${createHash("sha256").update(ciphertext).digest("base64url")}`;
+    const payload = {
+      format: "toksync-vault-v1",
+      schemaVersion: 1,
+      createdAt: "2026-05-20T00:00:00.000Z",
+      payloadDigest,
+      includes: {
+        publicCache: false,
+        receipts: false,
+        includeContent: false,
+      },
+      keyDerivation: {
+        algorithm: "scrypt",
+        salt: salt.toString("base64url"),
+        keyLength: 32,
+      },
+      encryption: {
+        algorithm: "aes-256-gcm",
+        iv: iv.toString("base64url"),
+        authTag: authTag.toString("base64url"),
+        ciphertext: ciphertext.toString("base64url"),
+      },
+    };
+
+    const result = repo.previewVaultImport("demo", payload, recoveryPassphrase);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("vault preview unexpectedly succeeded");
+    expect(result.status).toBe(400);
+    expect(result.response.error.code).toBe("privacy_violation");
   });
 
   it("upserts a cost guardrail and keeps budget exceeded anomalies private", () => {

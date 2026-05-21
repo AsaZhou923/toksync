@@ -1,23 +1,23 @@
 export default function DocsPage() {
-  const roadmap = [
+  const surfaces = [
     "Merge Copilot",
     "Sync Privacy Receipt",
     "Source Health Radar",
     "Cost Guardrails",
     "Private Usage Vault",
-    "Public Proof Pack",
   ];
+  const upcoming = ["Public Proof Pack"];
 
   return (
     <div className="grid">
       <header className="page-head">
         <div>
-          <p className="page-kicker">v0.1 documentation</p>
+          <p className="page-kicker">operator docs</p>
           <h1>Docs</h1>
           <p className="lede">
-            TokSync v0.1 is the local metrics-only loop: connect a device,
-            dry-run usage, sync metrics, review private rollups, and publish
-            only opt-in aggregate SVGs.
+            TokSync's docs mirror the live private console: connect a device,
+            sync metrics-only usage, review governance surfaces, back up the
+            private vault, and publish only opt-in aggregate SVGs.
           </p>
         </div>
       </header>
@@ -28,7 +28,22 @@ export default function DocsPage() {
         </a>
         <a className="card" href="/docs/sources">
           <h2 className="section-title">Sources</h2>
-          <p className="muted">Codex, Claude Code, and OpenCode collectors.</p>
+          <p className="muted">
+            Registry-backed collectors plus the parity watchlist.
+          </p>
+        </a>
+        <a className="card" href="/app/vault">
+          <h2 className="section-title">Private Usage Vault</h2>
+          <p className="muted">
+            Encrypted metrics backup, artifact download, preview, and restore.
+          </p>
+        </a>
+        <a className="card" href="/app/exports">
+          <h2 className="section-title">Local viewer</h2>
+          <p className="muted">
+            Aggregate-only JSON/CSV inspection. No encrypted artifact or restore
+            workflow.
+          </p>
         </a>
         <a className="card" href="/docs/embed">
           <h2 className="section-title">README embed</h2>
@@ -36,13 +51,24 @@ export default function DocsPage() {
         </a>
       </div>
       <section className="card">
-        <h2 className="section-title">Planned after v0.1</h2>
+        <h2 className="section-title">Current private governance surfaces</h2>
         <p className="muted">
-          These governance features are tracked in the external product specs
-          but are not current live capabilities.
+          These surfaces are live in the web console and stay private unless a
+          public aggregate lane is explicitly enabled.
         </p>
         <div className="toolbar">
-          {roadmap.map((item) => (
+          {surfaces.map((item) => (
+            <span className="pill" key={item}>
+              <span className="status-dot" />
+              {item}
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="card">
+        <h2 className="section-title">Still ahead</h2>
+        <div className="toolbar">
+          {upcoming.map((item) => (
             <span className="pill" key={item}>
               <span className="status-dot off" />
               {item}

@@ -1,4 +1,12 @@
-export const SOURCE_IDS = ["codex", "claude", "opencode"] as const;
+export const SOURCE_IDS = [
+  "codex",
+  "claude",
+  "opencode",
+  "cursor",
+  "copilot",
+  "gemini",
+  "openclaw",
+] as const;
 
 export type BuiltInSourceId = (typeof SOURCE_IDS)[number];
 
@@ -34,6 +42,41 @@ export const SOURCE_REGISTRY: SourceDefinition[] = [
       "AppData/Roaming/opencode/storage/message",
       "Library/Application Support/opencode/storage/message",
       "Library/Application Support/opencode",
+    ],
+    patterns: ["*.json", "*.jsonl"],
+  },
+  {
+    id: "cursor",
+    displayName: "Cursor",
+    description: "Cursor usage CSV cache synced from the Cursor usage API.",
+    defaultRelativePaths: [".config/tokscale/cursor-cache"],
+    patterns: ["usage*.csv"],
+  },
+  {
+    id: "copilot",
+    displayName: "GitHub Copilot",
+    description:
+      "GitHub Copilot OpenTelemetry JSONL usage from local private logs.",
+    defaultRelativePaths: [".copilot/otel"],
+    patterns: ["*.jsonl"],
+  },
+  {
+    id: "gemini",
+    displayName: "Gemini CLI",
+    description: "Gemini CLI tmp chat JSON/JSONL session usage.",
+    defaultRelativePaths: [".gemini/tmp"],
+    patterns: ["*.json", "*.jsonl"],
+  },
+  {
+    id: "openclaw",
+    displayName: "OpenClaw",
+    description:
+      "OpenClaw agent sessions.json indexes, transcript JSONL, and SDK usage logs.",
+    defaultRelativePaths: [
+      ".openclaw/agents",
+      ".clawdbot",
+      ".moltbot",
+      ".moldbot",
     ],
     patterns: ["*.json", "*.jsonl"],
   },

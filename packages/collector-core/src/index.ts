@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { estimateCostUsd } from "@toksync/pricing";
+import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
 import {
   hashWorkspacePath,
   sanitizeWorkspaceLabel,
@@ -15,6 +15,7 @@ import {
   type BuiltInSourceId,
   type UsageEventV1,
 } from "@toksync/shared";
+import { parseSourceSpecificUsageFile } from "./source-parsers";
 
 export interface SourceLocation {
   source: BuiltInSourceId;
@@ -59,8 +60,14 @@ export async function discoverSources(
         : source.defaultRelativePaths.map((relative) =>
             path.join(home, relative),
           );
-    for (const root of roots) {
-      const files = await listUsageFiles(root).catch(() => []);
+    if (
+      source.id === "copilot" &&
+      process.env.COPILOT_OTEL_FILE_EXPORTER_PATH
+    ) {
+      roots.push(process.env.COPILOT_OTEL_FILE_EXPORTER_PATH);
+    }
+    for (const root of [...new Set(roots)]) {
+      const files = await listUsageFiles(root, source.id).catch(() => []);
       locations.push({
         source: source.id,
         path: root,
@@ -86,7 +93,7 @@ export async function collectUsageEvents(
   const errors: CollectResult["errors"] = [];
 
   for (const location of locations.filter((item) => item.exists)) {
-    const files = await listUsageFiles(location.path).catch(
+    const files = await listUsageFiles(location.path, location.source).catch(
       (error: unknown) => {
         errors.push({
           source: location.source,
@@ -98,6 +105,25 @@ export async function collectUsageEvents(
     );
     for (const file of files) {
       try {
+        const sourceEvents = await parseSourceSpecificUsageFile({
+          source: location.source,
+          file,
+          deviceId: options.deviceId,
+          includeRawWorkspacePath: Boolean(options.includeRawWorkspacePath),
+          ...(options.workspaceHashSecret
+            ? { workspaceHashSecret: options.workspaceHashSecret }
+            : {}),
+        });
+        if (sourceEvents) {
+          events.push(...sourceEvents);
+          options.logger?.({
+            level: "info",
+            source: location.source,
+            path: file,
+            message: `Read ${sourceEvents.length} usage events`,
+          });
+          continue;
+        }
         const records: unknown[] = await readRecords(file);
         options.logger?.({
           level: "info",
@@ -191,7 +217,7 @@ async function fixtureLocations(fixtureRoot: string, sources: string[]) {
   const inferred = inferSourceFromPath(fixtureRoot);
   const inputPath = path.join(fixtureRoot, "input");
   const targetPath = (await exists(inputPath)) ? inputPath : fixtureRoot;
-  const files = await listUsageFiles(targetPath);
+  const files = await listUsageFiles(targetPath, inferred);
   return [
     {
       source: inferred,
@@ -202,16 +228,28 @@ async function fixtureLocations(fixtureRoot: string, sources: string[]) {
   ];
 }
 
-async function listUsageFiles(root: string): Promise<string[]> {
+async function listUsageFiles(
+  root: string,
+  source?: BuiltInSourceId,
+): Promise<string[]> {
   const stats = await fs.stat(root);
   if (stats.isFile()) return isUsageFile(root) ? [root] : [];
   const output: string[] = [];
   const entries = await fs.readdir(root, { withFileTypes: true });
+  const hasOpenClawSessionIndex =
+    source === "openclaw" &&
+    entries.some((entry) => entry.isFile() && entry.name === "sessions.json");
   for (const entry of entries) {
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      output.push(...(await listUsageFiles(fullPath)));
-    } else if (entry.isFile() && isUsageFile(fullPath)) {
+      output.push(...(await listUsageFiles(fullPath, source)));
+    } else if (
+      entry.isFile() &&
+      isUsageFile(fullPath) &&
+      (!hasOpenClawSessionIndex ||
+        entry.name === "sessions.json" ||
+        !isOpenClawTranscriptFile(fullPath))
+    ) {
       output.push(fullPath);
     }
   }
@@ -220,7 +258,22 @@ async function listUsageFiles(root: string): Promise<string[]> {
 
 function isUsageFile(file: string) {
   const lower = file.toLowerCase();
-  return lower.endsWith(".jsonl") || lower.endsWith(".json");
+  return (
+    lower.endsWith(".jsonl") ||
+    lower.includes(".jsonl.deleted.") ||
+    lower.includes(".jsonl.reset.") ||
+    lower.endsWith(".json") ||
+    lower.endsWith(".csv")
+  );
+}
+
+function isOpenClawTranscriptFile(file: string) {
+  const lower = path.basename(file).toLowerCase();
+  return (
+    lower.endsWith(".jsonl") ||
+    lower.includes(".jsonl.deleted.") ||
+    lower.includes(".jsonl.reset.")
+  );
 }
 
 async function readRecords(file: string) {
@@ -386,7 +439,7 @@ function normalizeRecord(
     tokens,
     costUsd:
       numberValue(record.costUsd, record.cost_usd, record.cost) ??
-      estimateCostUsd(modelId, tokens),
+      (pricingForModel(modelId) ? estimateCostUsd(modelId, tokens) : undefined),
     messageCount: numberValue(record.messageCount, record.message_count) ?? 1,
     isTurnStart: Boolean(record.isTurnStart ?? record.turnStart ?? true),
   };
@@ -527,6 +580,10 @@ function inferSourceFromPath(filePath: string): BuiltInSourceId {
     .toLowerCase()
     .split("/")
     .filter(Boolean);
+  if (segments.some((segment) => segment === "cursor")) return "cursor";
+  if (segments.some((segment) => segment === "copilot")) return "copilot";
+  if (segments.some((segment) => segment === "gemini")) return "gemini";
+  if (segments.some((segment) => segment === "openclaw")) return "openclaw";
   if (segments.some((segment) => segment === ".claude" || segment === "claude"))
     return "claude";
   if (segments.some((segment) => segment === "opencode")) return "opencode";
@@ -609,6 +666,7 @@ function recordValue(value: unknown) {
 function guessProvider(modelId: string) {
   const lower = modelId.toLowerCase();
   if (lower.includes("claude")) return "anthropic";
+  if (lower.includes("gemini")) return "google";
   if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4"))
     return "openai";
   return "unknown";

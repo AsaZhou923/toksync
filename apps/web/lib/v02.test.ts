@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildPrivacyReceipt,
   buildPublicGraph,
+  buildSourceParityRows,
   buildSourceHealthRows,
   toDailyCsv,
   type DashboardSummary,
   type SyncRun,
 } from "./v02";
+import { normalizeVaultExports, summarizeVaultPreview } from "./vault-ui";
 
 const summary: DashboardSummary = {
   totals: {
@@ -71,5 +73,68 @@ describe("v0.2 web helpers", () => {
 
     expect(csv).toContain("date,tokens,costUsd,sourceCount,sources");
     expect(csv).toContain("2026-05-17,157,0.01,1,codex:157");
+  });
+
+  it("shows registry-backed parity lanes and a live headless lane", () => {
+    const rows = buildSourceParityRows({ summary, latestRun: run });
+    expect(rows.find((row) => row.id === "cursor")?.status).toBe("watch");
+    expect(rows.find((row) => row.id === "headless")?.status).toBe("live");
+  });
+
+  it("normalizes vault exports from loose API payloads", () => {
+    const rows = normalizeVaultExports({
+      exports: [
+        {
+          exportId: "vault-1",
+          format: "toksync-vault-v1",
+          artifactDigest: "artifact-digest-1",
+          includePublicCache: true,
+          includeReceipts: true,
+          includeContent: false,
+          events: 42,
+        },
+      ],
+    });
+
+    expect(rows[0]?.id).toBe("vault-1");
+    expect(rows[0]?.digest).toBe("artifact-digest-1");
+    expect(rows[0]?.includesPublicCache).toBe(true);
+    expect(rows[0]?.scope).toContain("public-cache");
+  });
+
+  it("summarizes preview payloads without assuming a fixed schema", () => {
+    const lines = summarizeVaultPreview({
+      compatible: true,
+      format: "toksync-vault-v1",
+      payloadDigest: "vault-digest-1",
+      importableEvents: 6,
+      duplicateEvents: 2,
+      receiptCount: 1,
+      includes: {
+        publicCache: true,
+        receipts: true,
+        includeContent: false,
+      },
+      sourceSummary: {
+        codex: 5,
+        claude: 1,
+      },
+      totals: {
+        tokens: 100,
+        costUsd: 0.12,
+        messageCount: 4,
+      },
+      warnings: ["receipt mismatch"],
+    });
+
+    expect(lines).toContain("compatible=yes");
+    expect(lines).toContain("format=toksync-vault-v1");
+    expect(lines).toContain("digest=vault-digest-1");
+    expect(lines).toContain("importable=6");
+    expect(lines).toContain("duplicates=2");
+    expect(lines).toContain("receipts=1");
+    expect(lines).toContain("scope=metrics-only / public-cache / receipts");
+    expect(lines).toContain("sources=codex:5,claude:1");
+    expect(lines).toContain("warnings=1");
   });
 });

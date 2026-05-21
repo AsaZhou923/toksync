@@ -1,4 +1,13 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import {
   apiError,
   costGuardrailInputSchema,
@@ -8,6 +17,9 @@ import {
   SOURCE_REGISTRY,
   publicProfileInputSchema,
   totalTokens,
+  vaultEncryptedPayloadSchema,
+  vaultExportInputSchema,
+  vaultImportInputSchema,
   type CostGuardrailInput,
   type LeaderboardOptInInput,
   userApiTokenInputSchema,
@@ -18,6 +30,9 @@ import {
   type UserApiTokenInput,
   type UsageBatchEnvelope,
   type UsageEventV1,
+  type VaultEncryptedPayload,
+  type VaultExportInput,
+  type VaultImportInput,
 } from "@toksync/shared";
 import {
   FORBIDDEN_CONTENT_KEYS,
@@ -44,12 +59,67 @@ import type {
   UsageDailyRecord,
   UserRecord,
   UserApiTokenRecord,
+  VaultExportRecord,
 } from "./types";
 
 export interface RepositorySecrets {
   tokenHashSecret: string;
   deviceCodeSecret: string;
   deviceFingerprintPepper: string;
+}
+
+export interface VaultArtifactStore {
+  put(params: {
+    userId: string;
+    exportId: string;
+    payload: VaultEncryptedPayload;
+  }): string;
+  get(storageKey: string): VaultEncryptedPayload | null;
+}
+
+export class FileVaultArtifactStore implements VaultArtifactStore {
+  constructor(
+    public readonly rootDir = process.env.TOKSYNC_VAULT_ARTIFACT_DIR ||
+      path.resolve(
+        process.env.INIT_CWD || process.cwd(),
+        ".tmp",
+        "vault-artifacts",
+      ),
+  ) {}
+
+  put(params: {
+    userId: string;
+    exportId: string;
+    payload: VaultEncryptedPayload;
+  }) {
+    const storageKey = vaultArtifactStorageKey(params.userId, params.exportId);
+    const filePath = this.pathForKey(storageKey);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify(params.payload)}\n`);
+    return storageKey;
+  }
+
+  get(storageKey: string) {
+    const filePath = this.pathForKey(storageKey);
+    if (!fs.existsSync(filePath)) return null;
+    const parsed = vaultEncryptedPayloadSchema.safeParse(
+      JSON.parse(fs.readFileSync(filePath, "utf8")),
+    );
+    return parsed.success ? parsed.data : null;
+  }
+
+  private pathForKey(storageKey: string) {
+    if (!/^vault\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.json$/.test(storageKey)) {
+      throw new Error("Invalid vault artifact storage key");
+    }
+    const root = path.resolve(this.rootDir);
+    const filePath = path.resolve(root, storageKey);
+    const relative = path.relative(root, filePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Vault artifact key escapes storage root");
+    }
+    return filePath;
+  }
 }
 
 export interface AuthContext {
@@ -98,6 +168,20 @@ function requireSecret(name: keyof NodeJS.ProcessEnv) {
   return value;
 }
 
+function resolveVaultArtifactStore(): VaultArtifactStore | null {
+  return process.env.TOKSYNC_VAULT_ARTIFACT_DIR
+    ? new FileVaultArtifactStore(process.env.TOKSYNC_VAULT_ARTIFACT_DIR)
+    : null;
+}
+
+function vaultArtifactStorageKey(userId: string, exportId: string) {
+  return `vault/${safeStorageSegment(userId)}/${safeStorageSegment(exportId)}.json`;
+}
+
+function safeStorageSegment(value: string) {
+  return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 128) || "unknown";
+}
+
 function githubUsername(username: string) {
   const normalized = username.trim();
   if (isValidUsername(normalized)) return normalized;
@@ -141,6 +225,7 @@ export class TokSyncRepository {
   constructor(
     private readonly store = new FileTokSyncStore(),
     private readonly secrets: RepositorySecrets = resolveRepositorySecrets(),
+    private readonly vaultArtifactStore: VaultArtifactStore | null = resolveVaultArtifactStore(),
   ) {}
 
   reset() {
@@ -936,6 +1021,372 @@ export class TokSyncRepository {
         null,
         2,
       ),
+    };
+  }
+
+  listVaultExports(username = "demo") {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    return data.vaultExports
+      .filter((record) => record.userId === user.id && record.kind === "export")
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(vaultExportView);
+  }
+
+  getVaultExport(username: string, exportId: string) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    const record =
+      data.vaultExports.find(
+        (item) =>
+          item.userId === user.id &&
+          item.kind === "export" &&
+          item.id === exportId,
+      ) ?? null;
+    if (!record) return null;
+    const payload = this.loadVaultArtifact(record);
+    if (!payload) return null;
+    return {
+      export: vaultExportView(record),
+      payload,
+      payloadDigest: payload.payloadDigest,
+    };
+  }
+
+  private storeVaultArtifact(
+    userId: string,
+    exportId: string,
+    payload: VaultEncryptedPayload,
+  ): Pick<VaultExportRecord, "artifact" | "artifactStorageKey"> {
+    if (!this.vaultArtifactStore) return { artifact: payload };
+    return {
+      artifactStorageKey: this.vaultArtifactStore.put({
+        userId,
+        exportId,
+        payload,
+      }),
+    };
+  }
+
+  private loadVaultArtifact(record: VaultExportRecord) {
+    if (record.artifact) return record.artifact;
+    if (!record.artifactStorageKey || !this.vaultArtifactStore) return null;
+    const payload = this.vaultArtifactStore.get(record.artifactStorageKey);
+    if (!payload) return null;
+    if (
+      record.artifactDigest &&
+      payload.payloadDigest !== record.artifactDigest
+    ) {
+      throw new Error("Vault artifact digest mismatch");
+    }
+    return payload;
+  }
+
+  createVaultExport(username = "demo", rawInput: VaultExportInput) {
+    const input = vaultExportInputSchema.parse(rawInput);
+    let data = this.store.read();
+    let user = this.userByName(data, username);
+    if (!user) {
+      this.ensureUser(username);
+      data = this.store.read();
+      user = this.userByName(data, username);
+    }
+    if (!user) throw new Error("User disappeared during vault export");
+    if (input.includeContent) {
+      throw new Error("TokSync vault content export is not enabled");
+    }
+
+    const now = new Date().toISOString();
+    this.refreshSourceHealthInData(data, user.id, now);
+    const events = this.filterEvents(data, user.id, {});
+    const totals = sumEvents(events);
+    const devices = data.devices
+      .filter((device) => device.userId === user.id)
+      .map((device) =>
+        deviceView(
+          device,
+          events.filter((event) => event.deviceId === device.id).length,
+        ),
+      );
+    const snapshot = {
+      schemaVersion: 1 as const,
+      format: input.format,
+      exportedAt: now,
+      privacy: {
+        mode: "metrics-only" as const,
+        encrypted: true,
+        excludedFields: RECEIPT_EXCLUDED_FIELDS,
+      },
+      includes: {
+        publicCache: input.includePublicCache,
+        receipts: input.includeReceipts,
+        includeContent: false,
+      },
+      user: {
+        username: user.username,
+        displayName: user.displayName,
+        publicProfileEnabled: user.publicProfileEnabled,
+        showCost: user.showCost,
+        showSourceBreakdown: user.showSourceBreakdown,
+        showModelBreakdown: user.showModelBreakdown,
+        showWorkspaceBreakdown: user.showWorkspaceBreakdown,
+      },
+      devices,
+      metrics: {
+        events: events.map(vaultSnapshotEvent),
+        summary: {
+          totals: {
+            tokens: totals.tokens,
+            costUsd: round(totals.costUsd),
+            activeDays: new Set(events.map((event) => event.localDate)).size,
+            messageCount: totals.messages,
+            turns: events.filter((event) => event.isTurnStart).length,
+          },
+          topSources: vaultBreakdown(events, "source"),
+          topModels: vaultBreakdown(events, "modelId"),
+          topDevices: vaultBreakdown(events, "deviceId"),
+          topWorkspaces: vaultBreakdown(events, "workspaceLabel"),
+          lastSyncAt: latest(
+            data.syncRuns
+              .filter((run) => run.userId === user.id)
+              .map((run) => run.finishedAt || run.startedAt),
+          ),
+        },
+        usageDaily: usageDailyView(events),
+        sourceHealth: data.sourceHealthSnapshots
+          .filter((snapshot) => snapshot.userId === user.id)
+          .sort((a, b) => a.source.localeCompare(b.source))
+          .map(sourceHealthView),
+        mergeIssues: data.mergeIssues
+          .filter((issue) => issue.userId === user.id)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(mergeIssueView),
+        costGuardrails: {
+          rules: data.costGuardrailRules
+            .filter((rule) => rule.userId === user.id)
+            .map(costGuardrailRuleView),
+          anomalies: data.costAnomalies
+            .filter((anomaly) => anomaly.userId === user.id)
+            .map(costAnomalyView),
+        },
+      },
+      ...(input.includeReceipts
+        ? {
+            receipts: data.syncReceipts
+              .filter((receipt) => receipt.userId === user.id)
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+              .map(syncReceiptView),
+          }
+        : {}),
+      ...(input.includePublicCache
+        ? {
+            publicProfile: {
+              enabled: user.publicProfileEnabled,
+              stats: vaultPublicProfileStats(
+                data.publicProfileStats.find(
+                  (stats) => stats.userId === user.id,
+                ) ?? null,
+              ),
+            },
+          }
+        : {}),
+    };
+
+    assertMetricsOnlyPayload(snapshot);
+    const payload = encryptVaultPayload(
+      snapshot,
+      input.recoveryPassphrase,
+      now,
+    );
+    const receiptCount = input.includeReceipts
+      ? data.syncReceipts.filter((receipt) => receipt.userId === user.id).length
+      : 0;
+    const exportId = randomUUID();
+    const artifactLocation = this.storeVaultArtifact(
+      user.id,
+      exportId,
+      payload,
+    );
+    const record: VaultExportRecord = {
+      id: exportId,
+      userId: user.id,
+      kind: "export",
+      status: "completed",
+      format: input.format,
+      includePublicCache: input.includePublicCache,
+      includeReceipts: input.includeReceipts,
+      includeContent: false,
+      artifactDigest: payload.payloadDigest,
+      artifactByteSize: Buffer.byteLength(JSON.stringify(payload)),
+      ...artifactLocation,
+      eventCount: events.length,
+      deviceCount: devices.length,
+      sourceCount: new Set(events.map((event) => event.source)).size,
+      receiptCount,
+      createdAt: now,
+      finishedAt: now,
+    };
+    data.vaultExports.push(record);
+    this.store.write(data);
+    return {
+      export: vaultExportView(record),
+      payload,
+      payloadDigest: payload.payloadDigest,
+    };
+  }
+
+  previewVaultImport(
+    username: string,
+    rawPayload: unknown,
+    recoveryPassphrase: string,
+  ) {
+    const parsed = parseVaultPayload(rawPayload, recoveryPassphrase);
+    if (!parsed.ok) return parsed;
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    const duplicateEvents = user
+      ? countVaultDuplicateEvents(data, user.id, parsed.extracted.events)
+      : 0;
+    const previewEvents = parsed.extracted.events.map(previewStoredEvent);
+    const totals = sumEvents(previewEvents);
+    return {
+      ok: true as const,
+      response: {
+        format: parsed.payload.format,
+        createdAt: parsed.payload.createdAt,
+        payloadDigest: parsed.payload.payloadDigest,
+        includes: parsed.payload.includes,
+        eventCount: parsed.extracted.events.length,
+        importableEvents: parsed.extracted.events.length - duplicateEvents,
+        duplicateEvents,
+        deviceCount: parsed.extracted.devices.length,
+        receiptCount: parsed.extracted.receiptCount,
+        sourceSummary: countBy(parsed.extracted.events, "source"),
+        totals: {
+          tokens: totals.tokens,
+          costUsd: round(totals.costUsd),
+          messageCount: totals.messages,
+        },
+      },
+      status: 200,
+    };
+  }
+
+  importVault(
+    username: string,
+    rawPayload: unknown,
+    recoveryPassphrase: string,
+  ) {
+    const parsed = parseVaultPayload(rawPayload, recoveryPassphrase);
+    if (!parsed.ok) return parsed;
+    const ensured = this.ensureUser(username);
+    const data = this.store.read();
+    const user = data.users.find((item) => item.id === ensured.id);
+    if (!user)
+      return {
+        ok: false as const,
+        response: apiError("not_found", "User not found"),
+        status: 404,
+      };
+
+    const now = new Date().toISOString();
+    const indexes = buildUsageEventIndexes(data, user.id);
+    let inserted = 0;
+    let skipped = 0;
+    const sourceSummary: Record<string, number> = {};
+    ensureVaultImportDevices(
+      data,
+      user.id,
+      parsed.extracted.devices,
+      parsed.extracted.events,
+      now,
+      (value) => this.hashDeviceFingerprint(value),
+    );
+    const syncRun: SyncRunRecord = {
+      id: randomUUID(),
+      clientRunId: `vault-import-${randomUUID()}`,
+      userId: user.id,
+      deviceId: parsed.extracted.events[0]?.deviceId ?? "vault-import",
+      mode: "sync",
+      status: "completed",
+      sourceSummary,
+      insertedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      errorCount: 0,
+      startedAt: now,
+      finishedAt: now,
+    };
+    data.syncRuns.push(syncRun);
+
+    for (const event of parsed.extracted.events) {
+      sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
+      if (findExistingUsageEvent(indexes, user.id, event)) {
+        skipped += 1;
+        continue;
+      }
+      const stored: StoredUsageEvent = {
+        ...event,
+        id: randomUUID(),
+        userId: user.id,
+        syncRunId: syncRun.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.usageEvents.push(stored);
+      indexUsageEvent(indexes, stored);
+      inserted += 1;
+    }
+
+    syncRun.insertedCount = inserted;
+    syncRun.skippedCount = skipped;
+    syncRun.sourceSummary = sourceSummary;
+    data.vaultExports.push({
+      id: randomUUID(),
+      userId: user.id,
+      kind: "import",
+      status: "completed",
+      format: parsed.payload.format,
+      includePublicCache: parsed.payload.includes.publicCache,
+      includeReceipts: parsed.payload.includes.receipts,
+      includeContent: false,
+      artifactDigest: parsed.payload.payloadDigest,
+      artifactByteSize: Buffer.byteLength(JSON.stringify(parsed.payload)),
+      eventCount: parsed.extracted.events.length,
+      deviceCount: parsed.extracted.devices.length,
+      sourceCount: Object.keys(sourceSummary).length,
+      receiptCount: parsed.extracted.receiptCount,
+      createdAt: now,
+      finishedAt: now,
+    });
+    this.recomputeUserInData(data, user.id);
+    this.refreshSourceHealthInData(data, user.id, now);
+    this.refreshMergeIssuesInData(data, user.id, now);
+    this.store.write(data);
+
+    const previewEvents = parsed.extracted.events.map(previewStoredEvent);
+    const totals = sumEvents(previewEvents);
+    return {
+      ok: true as const,
+      response: {
+        format: parsed.payload.format,
+        createdAt: parsed.payload.createdAt,
+        payloadDigest: parsed.payload.payloadDigest,
+        eventCount: parsed.extracted.events.length,
+        importedEvents: inserted,
+        duplicateEvents: skipped,
+        deviceCount: parsed.extracted.devices.length,
+        receiptCount: parsed.extracted.receiptCount,
+        sourceSummary,
+        totals: {
+          tokens: totals.tokens,
+          costUsd: round(totals.costUsd),
+          messageCount: totals.messages,
+        },
+      },
+      status: 200,
     };
   }
 
@@ -2025,6 +2476,296 @@ function metricsExportRow(event: StoredUsageEvent) {
   };
 }
 
+function vaultSnapshotEvent(event: StoredUsageEvent): UsageEventV1 {
+  return {
+    schemaVersion: event.schemaVersion,
+    source: event.source,
+    sourceSessionId: event.sourceSessionId,
+    sourceMessageId: event.sourceMessageId,
+    dedupKey: event.dedupKey,
+    deviceId: event.deviceId,
+    workspaceKeyHash: event.workspaceKeyHash,
+    workspaceLabel: event.workspaceLabel,
+    agent: event.agent,
+    modelId: event.modelId,
+    providerId: event.providerId,
+    timestampMs: event.timestampMs,
+    localDate: event.localDate,
+    tokens: event.tokens,
+    costUsd: event.costUsd,
+    messageCount: event.messageCount,
+    isTurnStart: event.isTurnStart,
+  };
+}
+
+function encryptVaultPayload(
+  snapshot: unknown,
+  recoveryPassphrase: string,
+  createdAt: string,
+): VaultEncryptedPayload {
+  const plainText = JSON.stringify(snapshot);
+  const iv = randomBytes(12);
+  const salt = randomBytes(16);
+  const key = deriveVaultKey(recoveryPassphrase, salt);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(plainText, "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return {
+    format: "toksync-vault-v1",
+    schemaVersion: 1,
+    createdAt,
+    payloadDigest: `sha256:${sha256Base64Url(ciphertext)}`,
+    includes:
+      isRecord(snapshot) && isRecord(snapshot.includes)
+        ? {
+            publicCache: Boolean(snapshot.includes.publicCache),
+            receipts: Boolean(snapshot.includes.receipts),
+            includeContent: Boolean(snapshot.includes.includeContent),
+          }
+        : {
+            publicCache: true,
+            receipts: true,
+            includeContent: false,
+          },
+    keyDerivation: {
+      algorithm: "scrypt",
+      salt: salt.toString("base64url"),
+      keyLength: 32,
+    },
+    encryption: {
+      algorithm: "aes-256-gcm",
+      iv: iv.toString("base64url"),
+      authTag: authTag.toString("base64url"),
+      ciphertext: ciphertext.toString("base64url"),
+    },
+  };
+}
+
+function decryptVaultPayload(
+  payload: VaultEncryptedPayload,
+  recoveryPassphrase: string,
+) {
+  const ciphertext = Buffer.from(payload.encryption.ciphertext, "base64url");
+  const expectedDigest = `sha256:${sha256Base64Url(ciphertext)}`;
+  if (payload.payloadDigest !== expectedDigest) {
+    throw new Error("Vault payload digest mismatch");
+  }
+  const iv = Buffer.from(payload.encryption.iv, "base64url");
+  const authTag = Buffer.from(payload.encryption.authTag, "base64url");
+  const salt = Buffer.from(payload.keyDerivation.salt, "base64url");
+  const key = deriveVaultKey(recoveryPassphrase, salt);
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(authTag);
+  const plainText = Buffer.concat([
+    decipher.update(ciphertext),
+    decipher.final(),
+  ]).toString("utf8");
+  return JSON.parse(plainText) as unknown;
+}
+
+function deriveVaultKey(recoveryPassphrase: string, salt: Buffer) {
+  return scryptSync(recoveryPassphrase, salt, 32);
+}
+
+function parseVaultPayload(rawPayload: unknown, recoveryPassphrase: string) {
+  const parsedPayload = vaultEncryptedPayloadSchema.safeParse(rawPayload);
+  if (!parsedPayload.success) {
+    return {
+      ok: false as const,
+      response: apiError(
+        "invalid_payload",
+        "Vault payload failed validation",
+        parsedPayload.error.issues,
+      ),
+      status: 400,
+    };
+  }
+  if (parsedPayload.data.includes.includeContent) {
+    return {
+      ok: false as const,
+      response: apiError(
+        "feature_not_enabled",
+        "Content vault payloads are not supported",
+      ),
+      status: 400,
+    };
+  }
+
+  let snapshot: unknown;
+  try {
+    snapshot = decryptVaultPayload(parsedPayload.data, recoveryPassphrase);
+  } catch (error) {
+    return {
+      ok: false as const,
+      response: apiError(
+        "invalid_payload",
+        error instanceof Error
+          ? error.message
+          : "Vault payload could not be decrypted",
+      ),
+      status: 400,
+    };
+  }
+  try {
+    assertMetricsOnlyPayload(snapshot);
+  } catch (error) {
+    return {
+      ok: false as const,
+      response: apiError(
+        "privacy_violation",
+        error instanceof Error
+          ? error.message
+          : "Vault payload contains forbidden content fields",
+      ),
+      status: 400,
+    };
+  }
+
+  const extracted = extractVaultEvents(snapshot);
+  if (!extracted.ok) {
+    return {
+      ok: false as const,
+      response: apiError("invalid_payload", extracted.message),
+      status: 400,
+    };
+  }
+  return {
+    ok: true as const,
+    payload: parsedPayload.data,
+    snapshot,
+    extracted,
+  };
+}
+
+interface VaultSnapshotDevice {
+  id: string;
+  name?: string;
+  platform?: "windows" | "macos" | "linux";
+  agentVersion?: string;
+}
+
+function extractVaultEvents(snapshot: unknown) {
+  if (!isRecord(snapshot)) {
+    return { ok: false as const, message: "Vault snapshot must be an object" };
+  }
+  if (snapshot.format !== "toksync-vault-v1" || snapshot.schemaVersion !== 1) {
+    return {
+      ok: false as const,
+      message: "Vault schema version is not supported",
+    };
+  }
+  const metrics = isRecord(snapshot.metrics) ? snapshot.metrics : null;
+  const events = Array.isArray(metrics?.events) ? metrics.events : null;
+  if (!events) {
+    return {
+      ok: false as const,
+      message: "Vault snapshot is missing metrics.events",
+    };
+  }
+  const parsedEvents = events
+    .map((event) => usageEventV1Schema.safeParse(event))
+    .filter((result) => result.success)
+    .map((result) => result.data);
+  if (parsedEvents.length !== events.length) {
+    return {
+      ok: false as const,
+      message: "Vault snapshot contains invalid metrics events",
+    };
+  }
+  const devices = Array.isArray(snapshot.devices)
+    ? snapshot.devices
+        .map(vaultSnapshotDevice)
+        .filter((device): device is VaultSnapshotDevice => Boolean(device))
+    : [];
+  return {
+    ok: true as const,
+    events: parsedEvents,
+    devices,
+    receiptCount: Array.isArray(snapshot.receipts)
+      ? snapshot.receipts.length
+      : 0,
+  };
+}
+
+function vaultSnapshotDevice(value: unknown): VaultSnapshotDevice | null {
+  if (!isRecord(value) || typeof value.id !== "string") return null;
+  const device: VaultSnapshotDevice = { id: value.id };
+  if (typeof value.name === "string") device.name = value.name;
+  if (
+    value.platform === "windows" ||
+    value.platform === "macos" ||
+    value.platform === "linux"
+  ) {
+    device.platform = value.platform;
+  }
+  if (typeof value.agentVersion === "string") {
+    device.agentVersion = value.agentVersion;
+  }
+  return device;
+}
+
+function previewStoredEvent(event: UsageEventV1): StoredUsageEvent {
+  return {
+    ...event,
+    id: "preview",
+    userId: "preview",
+    syncRunId: "preview",
+    createdAt: "preview",
+    updatedAt: "preview",
+  };
+}
+
+function countVaultDuplicateEvents(
+  data: TokSyncData,
+  userId: string,
+  events: UsageEventV1[],
+) {
+  const indexes = buildUsageEventIndexes(data, userId);
+  return events.filter((event) =>
+    Boolean(findExistingUsageEvent(indexes, userId, event)),
+  ).length;
+}
+
+function ensureVaultImportDevices(
+  data: TokSyncData,
+  userId: string,
+  snapshotDevices: VaultSnapshotDevice[],
+  events: UsageEventV1[],
+  now: string,
+  hashDeviceFingerprint: (value: string) => string,
+) {
+  const devicesById = new Map(
+    snapshotDevices.map((device) => [device.id, device]),
+  );
+  for (const deviceId of new Set(events.map((event) => event.deviceId))) {
+    const existing = data.devices.find(
+      (device) => device.userId === userId && device.id === deviceId,
+    );
+    if (existing) {
+      existing.lastSeenAt = now;
+      existing.updatedAt = now;
+      continue;
+    }
+    const snapshotDevice = devicesById.get(deviceId);
+    data.devices.push({
+      id: deviceId,
+      userId,
+      deviceFingerprintHash: hashDeviceFingerprint(
+        `vault-import:${userId}:${deviceId}`,
+      ),
+      name: snapshotDevice?.name ?? "Imported vault device",
+      platform: snapshotDevice?.platform ?? "linux",
+      agentVersion: snapshotDevice?.agentVersion ?? "vault-import",
+      lastSeenAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+}
+
 function toCsv(rows: Array<ReturnType<typeof metricsExportRow>>) {
   const headers = [
     "schemaVersion",
@@ -2066,6 +2807,10 @@ function countBy<T extends Record<string, unknown>>(items: T[], key: keyof T) {
     counts[value] = (counts[value] ?? 0) + 1;
   }
   return counts;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function sourceHealthAction(
@@ -2182,6 +2927,25 @@ function mergeIssueView(issue: MergeIssueRecord) {
   };
 }
 
+function vaultExportView(record: VaultExportRecord) {
+  return {
+    id: record.id,
+    kind: record.kind,
+    status: record.status,
+    format: record.format,
+    includePublicCache: record.includePublicCache,
+    includeReceipts: record.includeReceipts,
+    includeContent: record.includeContent,
+    payloadDigest: record.artifactDigest,
+    artifactByteSize: record.artifactByteSize,
+    eventCount: record.eventCount,
+    deviceCount: record.deviceCount,
+    error: record.error,
+    createdAt: record.createdAt,
+    finishedAt: record.finishedAt,
+  };
+}
+
 function buildProfileStats(
   userId: string,
   events: StoredUsageEvent[],
@@ -2210,6 +2974,39 @@ function buildProfileStats(
   );
   if (lastSyncAt) profile.lastSyncAt = lastSyncAt;
   return profile;
+}
+
+function usageDailyView(events: StoredUsageEvent[]) {
+  const byDate = new Map<string, StoredUsageEvent[]>();
+  for (const event of events) {
+    byDate.set(event.localDate, [
+      ...(byDate.get(event.localDate) ?? []),
+      event,
+    ]);
+  }
+  return {
+    days: [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, items]) => {
+        const totals = sumEvents(items);
+        const sourceBreakdown: Record<
+          string,
+          { tokens: number; costUsd: number }
+        > = {};
+        for (const row of breakdown(items, "source")) {
+          sourceBreakdown[row.key] = {
+            tokens: row.tokens,
+            costUsd: row.costUsd,
+          };
+        }
+        return {
+          date,
+          tokens: totals.tokens,
+          costUsd: round(totals.costUsd),
+          sourceBreakdown,
+        };
+      }),
+  };
 }
 
 function sumEvents(events: StoredUsageEvent[]) {
@@ -2260,6 +3057,52 @@ function breakdown(
     })
     .sort((a, b) => b.tokens - a.tokens)
     .slice(0, 10);
+}
+
+function vaultBreakdown(
+  events: StoredUsageEvent[],
+  key: "source" | "modelId" | "deviceId" | "workspaceLabel",
+) {
+  return breakdown(events, key).map((row) => ({
+    key: row.key,
+    tokens: row.tokens,
+    costUsd: row.costUsd,
+    messageCount: row.messages,
+  }));
+}
+
+function vaultPublicProfileStats(stats: PublicProfileStatsRecord | null) {
+  if (!stats) return null;
+  return {
+    usernameLower: stats.usernameLower,
+    displayName: stats.displayName,
+    avatarUrl: stats.avatarUrl,
+    totalTokens: stats.totalTokens,
+    totalCostUsd: stats.totalCostUsd,
+    activeDays: stats.activeDays,
+    topSources: stats.topSources.map(vaultBreakdownRow),
+    topModels: stats.topModels.map(vaultBreakdownRow),
+    topWorkspaces: stats.topWorkspaces.map(vaultBreakdownRow),
+    dateStart: stats.dateStart,
+    dateEnd: stats.dateEnd,
+    lastSyncAt: stats.lastSyncAt,
+    updatedAt: stats.updatedAt,
+    showCost: stats.showCost,
+    showSourceBreakdown: stats.showSourceBreakdown,
+    showModelBreakdown: stats.showModelBreakdown,
+    showWorkspaceBreakdown: stats.showWorkspaceBreakdown,
+    dailyPublic: stats.dailyPublic,
+    leaderboardOptIn: stats.leaderboardOptIn,
+  };
+}
+
+function vaultBreakdownRow(row: BreakdownRow) {
+  return {
+    key: row.key,
+    tokens: row.tokens,
+    costUsd: row.costUsd,
+    messageCount: row.messages,
+  };
 }
 
 function publicWorkspaceBreakdown(events: StoredUsageEvent[]): BreakdownRow[] {

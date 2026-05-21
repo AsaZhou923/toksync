@@ -363,3 +363,40 @@ export const costAnomalies = pgTable(
     index("cost_anomalies_user_type_idx").on(table.userId, table.type),
   ],
 );
+
+export const vaultExports = pgTable(
+  "vault_exports",
+  {
+    id: uuid("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    format: text("format").notNull(),
+    includePublicCache: boolean("include_public_cache").notNull().default(true),
+    includeReceipts: boolean("include_receipts").notNull().default(true),
+    includeContent: boolean("include_content").notNull().default(false),
+    artifactDigest: text("artifact_digest"),
+    artifactByteSize: integer("artifact_byte_size"),
+    artifactStorageKey: text("artifact_storage_key"),
+    artifact: jsonb("artifact"),
+    eventCount: integer("event_count").notNull().default(0),
+    deviceCount: integer("device_count").notNull().default(0),
+    sourceCount: integer("source_count"),
+    receiptCount: integer("receipt_count"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("vault_exports_user_created_idx").on(table.userId, table.createdAt),
+    index("vault_exports_user_kind_created_idx").on(
+      table.userId,
+      table.kind,
+      table.createdAt,
+    ),
+  ],
+);

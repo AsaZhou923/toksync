@@ -6,6 +6,7 @@ const webPort = 3300;
 const apiUrl = `http://127.0.0.1:${apiPort}`;
 const webUrl = `http://127.0.0.1:${webPort}`;
 const testDbFile = path.resolve(".tmp", "playwright-toksync.json");
+const manageWebServer = process.env.TOKSYNC_SKIP_PLAYWRIGHT_WEBSERVER !== "1";
 
 export default defineConfig({
   testDir: "./tests",
@@ -35,32 +36,38 @@ export default defineConfig({
       },
     },
   ],
-  webServer: [
-    {
-      command:
-        "pnpm db:reset && pnpm db:seed && pnpm --filter @toksync/api start",
-      url: `${apiUrl}/health`,
-      timeout: 120_000,
-      reuseExistingServer: false,
-      env: {
-        PORT: String(apiPort),
-        TOKSYNC_DB_FILE: testDbFile,
-        APP_URL: webUrl,
-        TOKSYNC_DEV_USER: "demo",
-      },
-    },
-    {
-      command: `pnpm --filter @toksync/web exec next dev -p ${webPort}`,
-      url: webUrl,
-      timeout: 120_000,
-      reuseExistingServer: false,
-      env: {
-        API_URL: apiUrl,
-        NEXT_PUBLIC_API_URL: apiUrl,
-        TOKSYNC_DEV_USER: "demo",
-      },
-    },
-  ],
+  ...(manageWebServer
+    ? {
+        webServer: [
+          {
+            command: "node scripts/playwright-web-server.mjs api",
+            url: `${apiUrl}/health`,
+            timeout: 120_000,
+            reuseExistingServer: false,
+            gracefulShutdown: { signal: "SIGINT", timeout: 500 },
+            env: {
+              PORT: String(apiPort),
+              TOKSYNC_DB_FILE: testDbFile,
+              APP_URL: webUrl,
+              TOKSYNC_DEV_USER: "demo",
+            },
+          },
+          {
+            command: "node scripts/playwright-web-server.mjs web",
+            url: webUrl,
+            timeout: 120_000,
+            reuseExistingServer: false,
+            gracefulShutdown: { signal: "SIGINT", timeout: 500 },
+            env: {
+              API_URL: apiUrl,
+              NEXT_PUBLIC_API_URL: apiUrl,
+              PLAYWRIGHT_WEB_PORT: String(webPort),
+              TOKSYNC_DEV_USER: "demo",
+            },
+          },
+        ],
+      }
+    : {}),
 });
 
 export { apiUrl, webUrl };

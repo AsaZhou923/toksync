@@ -215,3 +215,28 @@ create table if not exists cost_anomalies (
 
 create index if not exists cost_anomalies_user_idx on cost_anomalies(user_id);
 create index if not exists cost_anomalies_user_type_idx on cost_anomalies(user_id, type);
+
+create table if not exists vault_exports (
+  id uuid primary key,
+  user_id uuid not null references users(id) on delete cascade,
+  kind text not null,
+  status text not null,
+  format text not null,
+  include_public_cache boolean not null default true,
+  include_receipts boolean not null default true,
+  include_content boolean not null default false,
+  artifact_digest text,
+  artifact_byte_size integer,
+  artifact_storage_key text,
+  artifact jsonb,
+  event_count integer not null default 0,
+  device_count integer not null default 0,
+  source_count integer,
+  receipt_count integer,
+  error text,
+  created_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+
+create index if not exists vault_exports_user_created_idx on vault_exports(user_id, created_at);
+create index if not exists vault_exports_user_kind_created_idx on vault_exports(user_id, kind, created_at);

@@ -124,6 +124,45 @@ export const localPreviewInputSchema = z.object({
   payload: z.unknown(),
 });
 
+export const vaultFormatSchema = z.literal("toksync-vault-v1");
+
+export const vaultExportInputSchema = z.object({
+  format: vaultFormatSchema.default("toksync-vault-v1"),
+  includePublicCache: z.boolean().default(true),
+  includeReceipts: z.boolean().default(true),
+  includeContent: z.boolean().default(false),
+  recoveryPassphrase: z.string().min(12),
+});
+
+export const vaultEncryptedPayloadSchema = z.object({
+  format: vaultFormatSchema,
+  schemaVersion: z.literal(1),
+  createdAt: z.string().datetime(),
+  payloadDigest: z.string().min(1),
+  includes: z.object({
+    publicCache: z.boolean(),
+    receipts: z.boolean(),
+    includeContent: z.boolean(),
+  }),
+  keyDerivation: z.object({
+    algorithm: z.literal("scrypt"),
+    salt: z.string().min(1),
+    keyLength: z.literal(32),
+  }),
+  encryption: z.object({
+    algorithm: z.literal("aes-256-gcm"),
+    iv: z.string().min(1),
+    authTag: z.string().min(1),
+    ciphertext: z.string().min(1),
+  }),
+});
+
+export const vaultImportPreviewInputSchema = z.object({
+  payload: vaultEncryptedPayloadSchema,
+  recoveryPassphrase: z.string().min(12),
+});
+export const vaultImportInputSchema = vaultImportPreviewInputSchema;
+
 export const deviceStartInputSchema = z.object({
   deviceName: z.string().min(1).max(160),
   platform: z.enum(["windows", "macos", "linux"]),
@@ -147,4 +186,11 @@ export type MergeIssueResolutionInput = z.infer<
   typeof mergeIssueResolutionInputSchema
 >;
 export type LocalPreviewInput = z.infer<typeof localPreviewInputSchema>;
+export type VaultFormat = z.infer<typeof vaultFormatSchema>;
+export type VaultExportInput = z.infer<typeof vaultExportInputSchema>;
+export type VaultEncryptedPayload = z.infer<typeof vaultEncryptedPayloadSchema>;
+export type VaultImportInput = z.infer<typeof vaultImportInputSchema>;
+export type VaultImportPreviewInput = z.infer<
+  typeof vaultImportPreviewInputSchema
+>;
 export type DeviceStartInput = z.infer<typeof deviceStartInputSchema>;
