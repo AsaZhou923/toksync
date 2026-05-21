@@ -2,6 +2,103 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-21-v0-4-security-review-hardening"></a>
+
+## 2026-05-21 - v0.4 security review hardening
+
+日期：2026-05-21
+
+本次更新收敛 v0.4 审查后发现的安全、可观测性和验证门禁缺口：生产 OAuth 增加 PKCE 与更严格 cookie，API 增加 request id、结构化日志和请求体大小限制，Vault 导出明确加密参数，collector 与 CSV/export 边界补上回归测试，并把 GitHub Actions CI 固化为完整发布门禁。
+
+## 概览
+
+- GitHub OAuth start/callback 增加 PKCE S256，生产或 HTTPS 场景使用 `__Host-` session/state cookie，并在 logout/callback 时清理新旧 cookie 名。
+- API 所有响应带 `X-Request-Id`，生产或显式开启日志时输出结构化 request log；`/v1/*` 写接口增加 1 MB / 5 MB 请求体上限并返回 `413 payload_too_large`。
+- Web 通过 Next.js `headers()` 增加 CSP、Referrer-Policy、X-Content-Type-Options 和 X-Frame-Options。
+- Private Usage Vault 新建导出要求至少 16 字符 recovery passphrase，payload 记录显式 scrypt `{ N: 65536, r: 8, p: 1 }` 参数，并保留旧 payload import 兼容。
+- CI 新增 GitHub Actions workflow，跑格式、包边界、类型、lint、unit、coverage、build、migration、E2E、visual 和 perf smoke。
+
+## Agent / Collector
+
+- Agent config 写入时尽量设置配置目录 `0700`、配置文件 `0600`；Windows 或受限文件系统无法 chmod 时继续 best-effort。
+- Codex token normalizer 先把 cache read clamp 到 input 再扣减 inclusive cached input，避免 cache read 大于 input 时 summary token 总数被高估。
+- 新增 source-specific parser tests，覆盖 Cursor CSV cache-write 列、Copilot OTEL body 丢弃和 generic source 回退 shared normalizer。
+- Copilot discovery 增加 `COPILOT_OTEL_FILE_EXPORTER_PATH` 环境变量文件路径回归测试。
+
+## API / Storage
+
+- Hosted GitHub OAuth token exchange 会提交 PKCE `code_verifier`，state cookie 可兼容 legacy raw state 和新 JSON/base64url state。
+- Rate limit bucket 增加周期性 prune 和最大 bucket 数，避免长时间运行时 map 无界增长。
+- SVG 响应继续设置 `image/svg+xml`、`nosniff` 和禁止脚本的 CSP；badge SVG id 改用随机 UUID，避免同进程多次渲染时可预测递增 id。
+- CSV metrics export 对 `=`, `+`, `-`, `@`, tab 和 CR 开头的 string cell 加前缀单引号，避免 spreadsheet formula injection。
+- Vault import preview 增加错误 passphrase 和 tampered digest API 覆盖；repository 层继续拒绝违反 metrics-only guard 的 vault payload。
+- 设备授权 TTL、poll interval、cost spike baseline/multiplier/min delta 和 vault scrypt 参数抽成显式常量，减少隐式 magic number。
+
+## Web / Embed
+
+- Web 当前范围说明同步 CSP/security headers。
+- README/中文 README 同步 Vault passphrase 最小长度、显式 scrypt 参数和 `pnpm test:coverage` 验证命令。
+
+## Privacy / Public Data
+
+- Vault artifact 仍只包含 metrics-only 快照，不导出 prompt、assistant reply、tool args、tool output、file content、raw path、plaintext token 或 secrets。
+- Vault import 的错误 passphrase、digest mismatch 和 schema/privacy guard 失败不会写入 usage events。
+- Collector parser tests 断言 Copilot OTEL prompt body 不会进入 normalized events。
+- Public SVG 输出仍只读公开聚合状态，响应 CSP 禁止脚本执行。
+
+## 文档同步
+
+- `README.md` 和 `README.zh-CN.md` 同步安全头、Vault 加密约束和 coverage gate。
+- 外部 TokSync docs 已同步 API limit/request id/logging、OAuth PKCE、`__Host-` cookie、agent config 权限、testing gate 和当前功能指南。
+- 本次 workflow 继续同步外部 Update Logs 镜像。
+
+## 影响文件
+
+### Apps
+
+- `.github/workflows/ci.yml`
+- `apps/agent/src/config.ts`
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/web/next.config.mjs`
+
+### Packages
+
+- `packages/collector-core/src/index.ts`
+- `packages/collector-core/src/index.test.ts`
+- `packages/collector-core/src/source-parsers.test.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/embed-renderer/src/index.ts`
+- `packages/shared/src/errors.ts`
+- `packages/shared/src/schemas.ts`
+- `packages/shared/src/schemas.test.ts`
+- `package.json`
+- `pnpm-lock.yaml`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\api-design.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\auth-and-permission.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\00 - Specs\testing.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\03 - Guides\当前功能与使用指南.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\09 - Changelog\Update Logs\CHANGELOG.md`
+- `E:\Project Code\docs\01 - Projects\TokSync\09 - Changelog\Update Logs\CHANGELOG_WORKFLOW.md`
+
+## 验证
+
+- `pnpm exec prettier --check docs/changelog/CHANGELOG.md docs/changelog/CHANGELOG_WORKFLOW.md`
+- 外部 Update Logs 镜像 SHA256 parity
+- `pnpm test:full`
+- `pnpm test:coverage`
+- `pnpm db:migrate`
+- `rg -n "docs/changelog/update-log|update-log-[0-9]{4}|CHANGELOG.md#" . -g "!docs/changelog/CHANGELOG_WORKFLOW.md" -g "!docs/changelog/CHANGELOG.md"` 无残留匹配
+- `git diff --check`
+
 <a id="2026-05-20-v0-4-source-parity-vault"></a>
 
 ## 2026-05-20 - v0.4 source parity and private vault

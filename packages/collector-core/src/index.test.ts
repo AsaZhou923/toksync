@@ -152,6 +152,49 @@ describe("collector-core fixtures", () => {
     expect(serialized).not.toContain("private-client");
   });
 
+  it("clamps Codex cache reads to input before subtracting inclusive cache tokens", async () => {
+    const fixture = writeFixture("codex", [
+      {
+        timestamp: "2026-02-03T00:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: "codex-clamped-cache-session",
+          cwd: "C:/Users/demo/project",
+          model: "gpt-5.4",
+          model_provider: "openai",
+        },
+      },
+      {
+        timestamp: "2026-02-03T00:01:00.000Z",
+        type: "token_count",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 50,
+              output_tokens: 30,
+              cached_input_tokens: 100,
+              reasoning_output_tokens: 5,
+            },
+          },
+        },
+      },
+    ]);
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.tokens).toEqual({
+      input: 0,
+      output: 30,
+      cacheRead: 50,
+      cacheWrite: 0,
+      reasoning: 5,
+    });
+    expect(summarizeEvents(result.events).tokens).toBe(85);
+  });
+
   it("normalizes current Claude message usage records without content fields", async () => {
     const fixture = writeFixture("claude", [
       {
@@ -260,6 +303,28 @@ describe("collector-core fixtures", () => {
     });
     expect(result.events).toEqual([]);
     expect(result.errors[0]?.message).toMatch(/Unsafe JSON key/);
+  });
+
+  it("discovers a Copilot OTEL exporter file from the environment", async () => {
+    const file = writeTextFixture("copilot", "otel.jsonl", "{}\n");
+    const previous = process.env.COPILOT_OTEL_FILE_EXPORTER_PATH;
+    process.env.COPILOT_OTEL_FILE_EXPORTER_PATH = file;
+    try {
+      const locations = await discoverSources(["copilot"]);
+      expect(
+        locations.find((location) => location.path === file),
+      ).toMatchObject({
+        source: "copilot",
+        exists: true,
+        fileCount: 1,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.COPILOT_OTEL_FILE_EXPORTER_PATH;
+      } else {
+        process.env.COPILOT_OTEL_FILE_EXPORTER_PATH = previous;
+      }
+    }
   });
 
   it("does not upload raw absolute workspace labels", async () => {

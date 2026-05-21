@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { formatCompactNumber, formatUsd } from "@toksync/shared";
 
 export interface PublicEmbedStats {
@@ -30,8 +31,6 @@ export interface CardOptions {
   metric?: "tokens" | "cost";
 }
 
-let badgeSvgCounter = 0;
-
 function escapeXml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -61,7 +60,7 @@ export function renderBadgeSvg(
   const valueWidth = Math.max(58, value.length * 8 + 18);
   const labelWidth = Math.max(62, label.length * 8 + 20);
   const width = labelWidth + valueWidth;
-  const idPrefix = `toksync-badge-${(badgeSvgCounter += 1).toString(36)}`;
+  const idPrefix = `toksync-badge-${randomUUID()}`;
   const gradientId = `${idPrefix}-shade`;
   const clipId = `${idPrefix}-clip`;
 

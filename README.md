@@ -52,7 +52,7 @@ only, with no source/model subboards.
 | Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs |
 | API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault        |
 | Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                            |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault                        |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, CSP/security headers  |
 | Public output      | README badge/profile-card SVG from public aggregate cache only                                                      |
 | Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                      |
 
@@ -136,8 +136,9 @@ private object directory with `TOKSYNC_VAULT_ARTIFACT_DIR`.
 - Leaderboard participation requires public profile plus a second explicit
   opt-in, reads public aggregate cache only, and is global-only.
 - Private Usage Vault encrypts metrics-only artifacts with a user recovery
-  passphrase; exports can be downloaded and imported across instances with
-  idempotent duplicate handling.
+  passphrase of at least 16 characters; new exports record explicit scrypt
+  parameters and can be downloaded/imported across instances with idempotent
+  duplicate handling.
 - Content sync, search, eval export, and proof-pack workflows are future opt-in
   features, not current behavior.
 
@@ -175,6 +176,7 @@ pnpm check:boundaries
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm test:e2e
 pnpm test:visual

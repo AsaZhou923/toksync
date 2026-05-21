@@ -10,6 +10,7 @@ export type ApiErrorCode =
   | "oauth_exchange_failed"
   | "oauth_profile_failed"
   | "unsupported_query"
+  | "payload_too_large"
   | "expired_code"
   | "consumed_code"
   | "rate_limited";

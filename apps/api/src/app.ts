@@ -1,4 +1,10 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
 import { cors } from "hono/cors";
 import {
@@ -33,6 +39,18 @@ export interface ApiAppOptions {
   devAuth?: boolean;
   sessionSecret?: string;
   githubOAuth?: Partial<GitHubOAuthConfig>;
+  logger?: ApiLogger;
+}
+
+export type ApiLogger = (entry: ApiLogEntry) => void;
+
+export interface ApiLogEntry {
+  level: "info" | "error";
+  requestId: string;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
 }
 
 interface GitHubOAuthConfig {
@@ -66,6 +84,9 @@ export function createApiApp(options: ApiAppOptions = {}) {
   const devAuth = resolveDevAuth(options.devAuth);
   const sessionSecret = resolveSessionSecret(options.sessionSecret);
   const githubOAuth = resolveGitHubOAuth(options.githubOAuth);
+  const logger = options.logger ?? defaultApiLogger;
+
+  app.use("*", requestContext(logger));
 
   app.use(
     "*",
@@ -76,6 +97,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
       credentials: true,
     }),
   );
+  app.use("*", requestBodyLimit());
   app.use("*", rateLimit());
 
   app.get("/health", (c) =>
@@ -92,12 +114,15 @@ export function createApiApp(options: ApiAppOptions = {}) {
         503,
       );
     const state = randomBytes(24).toString("base64url");
+    const pkce = createPkcePair();
     const authorizeUrl = new URL(githubOAuth.authorizeUrl);
     authorizeUrl.searchParams.set("client_id", githubOAuth.clientId);
     authorizeUrl.searchParams.set("redirect_uri", githubOAuth.redirectUri);
     authorizeUrl.searchParams.set("scope", "read:user user:email");
     authorizeUrl.searchParams.set("state", state);
-    c.header("Set-Cookie", oauthStateCookie(state, c.req.url));
+    authorizeUrl.searchParams.set("code_challenge", pkce.challenge);
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+    c.header("Set-Cookie", oauthStateCookie({ ...pkce, state }, c.req.url));
     return c.redirect(authorizeUrl.toString(), 302);
   });
 
@@ -112,18 +137,19 @@ export function createApiApp(options: ApiAppOptions = {}) {
       );
     const code = c.req.query("code");
     const state = c.req.query("state");
-    if (
-      !code ||
-      !state ||
-      state !== cookieValue(c.req.raw, OAUTH_STATE_COOKIE)
-    ) {
+    const stateCookie = oauthStateFromRequest(c.req.raw);
+    if (!code || !state || !stateCookie || state !== stateCookie.state) {
       return c.json(
         apiError("invalid_oauth_state", "Invalid OAuth state"),
         400,
       );
     }
 
-    const token = await exchangeGitHubCode(githubOAuth, code);
+    const token = await exchangeGitHubCode(
+      githubOAuth,
+      code,
+      stateCookie.codeVerifier,
+    );
     if (!token) {
       return c.json(
         apiError("oauth_exchange_failed", "GitHub OAuth token exchange failed"),
@@ -143,14 +169,12 @@ export function createApiApp(options: ApiAppOptions = {}) {
       "Set-Cookie",
       sessionCookie(user.username, sessionSecret, c.req.url),
     );
-    c.header("Set-Cookie", clearCookie(OAUTH_STATE_COOKIE, c.req.url), {
-      append: true,
-    });
+    clearOAuthStateCookies(c);
     return c.redirect(process.env.GITHUB_OAUTH_SUCCESS_REDIRECT || "/app", 302);
   });
 
   app.post("/v1/auth/logout", (c) => {
-    c.header("Set-Cookie", clearCookie(SESSION_COOKIE, c.req.url));
+    clearSessionCookies(c);
     return c.json({ status: "logged_out" });
   });
 
@@ -689,11 +713,24 @@ export function createApiApp(options: ApiAppOptions = {}) {
   return app;
 }
 
-const SESSION_COOKIE = "toksync_session";
-const OAUTH_STATE_COOKIE = "toksync_oauth_state";
+const LEGACY_SESSION_COOKIE = "toksync_session";
+const HOST_SESSION_COOKIE = "__Host-toksync_session";
+const LEGACY_OAUTH_STATE_COOKIE = "toksync_oauth_state";
+const HOST_OAUTH_STATE_COOKIE = "__Host-toksync_oauth_state";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const OAUTH_STATE_MAX_AGE_SECONDS = 60 * 10;
 const DEV_SESSION_SECRET = "dev-session-secret-change-me";
+const DEFAULT_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
+const LARGE_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
+const RATE_LIMIT_PRUNE_INTERVAL_MS = 60_000;
+const RATE_LIMIT_MAX_BUCKETS = 10_000;
+
+interface OAuthStateCookie {
+  state: string;
+  verifier?: string | undefined;
+  challenge?: string | undefined;
+  codeVerifier?: string | undefined;
+}
 
 function bearerToken(request: Request) {
   const auth = request.headers.get("authorization");
@@ -749,6 +786,7 @@ function resolveGitHubOAuth(
 async function exchangeGitHubCode(
   config: GitHubOAuthConfig,
   code: string,
+  codeVerifier?: string,
 ): Promise<string | null> {
   const body = new URLSearchParams({
     client_id: config.clientId,
@@ -756,6 +794,7 @@ async function exchangeGitHubCode(
     code,
     redirect_uri: config.redirectUri,
   });
+  if (codeVerifier) body.set("code_verifier", codeVerifier);
   const response = await config.fetch(config.tokenUrl, {
     method: "POST",
     body,
@@ -836,17 +875,25 @@ function userFromRequest(
 }
 
 function sessionCookie(username: string, secret: string, requestUrl: string) {
-  return serializeCookie(SESSION_COOKIE, signSession(username, secret), {
-    maxAge: SESSION_MAX_AGE_SECONDS,
-    requestUrl,
-  });
+  return serializeCookie(
+    sessionCookieName(requestUrl),
+    signSession(username, secret),
+    {
+      maxAge: SESSION_MAX_AGE_SECONDS,
+      requestUrl,
+    },
+  );
 }
 
-function oauthStateCookie(state: string, requestUrl: string) {
-  return serializeCookie(OAUTH_STATE_COOKIE, state, {
-    maxAge: OAUTH_STATE_MAX_AGE_SECONDS,
-    requestUrl,
-  });
+function oauthStateCookie(state: OAuthStateCookie, requestUrl: string) {
+  return serializeCookie(
+    oauthStateCookieName(requestUrl),
+    Buffer.from(JSON.stringify(state), "utf8").toString("base64url"),
+    {
+      maxAge: OAUTH_STATE_MAX_AGE_SECONDS,
+      requestUrl,
+    },
+  );
 }
 
 function clearCookie(name: string, requestUrl: string) {
@@ -867,7 +914,9 @@ function signSession(username: string, secret: string) {
 }
 
 function usernameFromSessionCookie(request: Request, secret: string) {
-  const token = cookieValue(request, SESSION_COOKIE);
+  const token =
+    cookieValue(request, sessionCookieName(request.url)) ??
+    cookieValue(request, LEGACY_SESSION_COOKIE);
   if (!token) return null;
   const [payload, signature] = token.split(".");
   if (!payload || !signature) return null;
@@ -912,6 +961,81 @@ function cookieValue(request: Request, name: string) {
     if (rawKey === name) return decodeURIComponent(rawValue.join("="));
   }
   return null;
+}
+
+function sessionCookieName(requestUrl: string) {
+  return shouldUseHostCookiePrefix(requestUrl)
+    ? HOST_SESSION_COOKIE
+    : LEGACY_SESSION_COOKIE;
+}
+
+function oauthStateCookieName(requestUrl: string) {
+  return shouldUseHostCookiePrefix(requestUrl)
+    ? HOST_OAUTH_STATE_COOKIE
+    : LEGACY_OAUTH_STATE_COOKIE;
+}
+
+function shouldUseHostCookiePrefix(requestUrl: string) {
+  return (
+    process.env.NODE_ENV === "production" ||
+    new URL(requestUrl).protocol === "https:"
+  );
+}
+
+function clearSessionCookies(c: Context) {
+  for (const name of uniqueCookieNames([
+    sessionCookieName(c.req.url),
+    LEGACY_SESSION_COOKIE,
+    HOST_SESSION_COOKIE,
+  ])) {
+    c.header("Set-Cookie", clearCookie(name, c.req.url), { append: true });
+  }
+}
+
+function clearOAuthStateCookies(c: Context) {
+  for (const name of uniqueCookieNames([
+    oauthStateCookieName(c.req.url),
+    LEGACY_OAUTH_STATE_COOKIE,
+    HOST_OAUTH_STATE_COOKIE,
+  ])) {
+    c.header("Set-Cookie", clearCookie(name, c.req.url), { append: true });
+  }
+}
+
+function uniqueCookieNames(names: string[]) {
+  return [...new Set(names)];
+}
+
+function oauthStateFromRequest(request: Request) {
+  const raw =
+    cookieValue(request, oauthStateCookieName(request.url)) ??
+    cookieValue(request, LEGACY_OAUTH_STATE_COOKIE);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(raw, "base64url").toString("utf8"),
+    ) as OAuthStateCookie;
+    if (typeof parsed.state !== "string") return null;
+    return {
+      state: parsed.state,
+      codeVerifier:
+        typeof parsed.codeVerifier === "string"
+          ? parsed.codeVerifier
+          : typeof parsed.verifier === "string"
+            ? parsed.verifier
+            : undefined,
+    };
+  } catch {
+    return { state: raw, codeVerifier: undefined };
+  }
+}
+
+function createPkcePair() {
+  const codeVerifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256")
+    .update(codeVerifier)
+    .digest("base64url");
+  return { codeVerifier, challenge };
 }
 
 function serializeCookie(
@@ -1075,6 +1199,105 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
+function requestContext(logger: ApiLogger) {
+  return async (c: Context, next: Next) => {
+    const requestId = c.req.raw.headers.get("x-request-id") || randomUUID();
+    const startedAt = Date.now();
+    const requestUrl = new URL(c.req.url);
+    c.header("X-Request-Id", requestId);
+    await next();
+    logger({
+      level: c.res.status >= 500 ? "error" : "info",
+      requestId,
+      method: c.req.method,
+      path: requestUrl.pathname,
+      status: c.res.status,
+      durationMs: Date.now() - startedAt,
+    });
+  };
+}
+
+function defaultApiLogger(entry: ApiLogEntry) {
+  if (
+    process.env.NODE_ENV === "test" ||
+    (process.env.NODE_ENV !== "production" && !process.env.TOKSYNC_LOG_REQUESTS)
+  ) {
+    return;
+  }
+  console.log(JSON.stringify({ service: "toksync-api", ...entry }));
+}
+
+function requestBodyLimit() {
+  return async (c: Context, next: Next) => {
+    const maxSize = bodyLimitForPath(new URL(c.req.url).pathname);
+    if (!maxSize || !methodMayHaveBody(c.req.method) || !c.req.raw.body) {
+      await next();
+      return;
+    }
+    const hasTransferEncoding = c.req.raw.headers.has("transfer-encoding");
+    const contentLengthHeader = c.req.raw.headers.get("content-length");
+    if (contentLengthHeader && !hasTransferEncoding) {
+      const contentLength = Number.parseInt(contentLengthHeader, 10);
+      if (Number.isFinite(contentLength) && contentLength > maxSize) {
+        return payloadTooLarge(c, maxSize);
+      }
+      await next();
+      return;
+    }
+
+    let size = 0;
+    const chunks: Uint8Array[] = [];
+    const reader = c.req.raw.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > maxSize) return payloadTooLarge(c, maxSize);
+      chunks.push(value);
+    }
+    c.req.raw = new Request(c.req.raw, {
+      body: new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    await next();
+  };
+}
+
+function bodyLimitForPath(pathname: string) {
+  if (
+    pathname === "/v1/sync/usage-batch" ||
+    pathname === "/v1/local/preview" ||
+    pathname === "/v1/vault/imports" ||
+    pathname === "/v1/vault/imports/preview"
+  ) {
+    return LARGE_BODY_LIMIT_BYTES;
+  }
+  return pathname.startsWith("/v1/") ? DEFAULT_BODY_LIMIT_BYTES : null;
+}
+
+function methodMayHaveBody(method: string) {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function payloadTooLarge(c: Context, maxSize: number) {
+  return c.json(
+    apiError(
+      "payload_too_large",
+      `Request body exceeds the ${formatBytes(maxSize)} limit`,
+    ),
+    413,
+  );
+}
+
+function formatBytes(bytes: number) {
+  return `${Math.floor(bytes / 1024 / 1024)}MB`;
+}
+
 interface RateLimitBucket {
   count: number;
   resetAt: number;
@@ -1082,6 +1305,7 @@ interface RateLimitBucket {
 
 function rateLimit() {
   const rateLimitBuckets = new Map<string, RateLimitBucket>();
+  let lastPrunedAt = 0;
   return async (c: Context, next: Next) => {
     const requestUrl = new URL(c.req.url);
     const policy = rateLimitPolicy(requestUrl.pathname);
@@ -1091,6 +1315,13 @@ function rateLimit() {
     }
 
     const now = Date.now();
+    if (
+      now - lastPrunedAt > RATE_LIMIT_PRUNE_INTERVAL_MS ||
+      rateLimitBuckets.size > RATE_LIMIT_MAX_BUCKETS
+    ) {
+      pruneRateLimitBuckets(rateLimitBuckets, now);
+      lastPrunedAt = now;
+    }
     const key = `${clientKey(c.req.raw)}:${policy.name}`;
     const bucket = rateLimitBuckets.get(key);
     const current =
@@ -1112,6 +1343,20 @@ function rateLimit() {
 
     await next();
   };
+}
+
+function pruneRateLimitBuckets(
+  buckets: Map<string, RateLimitBucket>,
+  now: number,
+) {
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) buckets.delete(key);
+  }
+  while (buckets.size > RATE_LIMIT_MAX_BUCKETS) {
+    const oldestKey = buckets.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    buckets.delete(oldestKey);
+  }
 }
 
 function rateLimitPolicy(pathname: string) {

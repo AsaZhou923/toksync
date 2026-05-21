@@ -46,10 +46,14 @@ export function loadConfig(): AgentConfig {
 }
 
 export function saveConfig(config: AgentConfig) {
-  fs.mkdirSync(configDir(), { recursive: true });
-  fs.writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`, {
+  const dir = configDir();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodBestEffort(dir, 0o700);
+  const file = configPath();
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, {
     mode: 0o600,
   });
+  chmodBestEffort(file, 0o600);
 }
 
 export function clearAuth(config: AgentConfig) {
@@ -68,4 +72,12 @@ export function currentPlatform(): "windows" | "macos" | "linux" {
   if (process.platform === "win32") return "windows";
   if (process.platform === "darwin") return "macos";
   return "linux";
+}
+
+function chmodBestEffort(file: string, mode: number) {
+  try {
+    fs.chmodSync(file, mode);
+  } catch {
+    // Windows and locked-down filesystems may ignore POSIX-style mode changes.
+  }
 }

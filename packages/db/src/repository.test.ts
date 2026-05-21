@@ -381,6 +381,30 @@ describe("TokSyncRepository", () => {
     expect(repo.dashboardSummary("demo")?.totals.costUsd).toBe(0.01);
   });
 
+  it("escapes formula-prefixed values in CSV exports", () => {
+    const repo = createRepo();
+    const auth = authorizeDevice(repo);
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          modelId: '=IMPORTXML("https://example.test")',
+          providerId: "@provider",
+          dedupKey: "codex:csv-formula",
+        }),
+      ],
+      "csv-export",
+    );
+
+    const exported = repo.exportMetrics("demo", { format: "csv" });
+
+    expect(exported?.body).toContain('\'=IMPORTXML(""https://example.test"")');
+    expect(exported?.body).toContain("'@provider");
+    expect(exported?.body).not.toContain(",=IMPORTXML");
+    expect(exported?.body).not.toContain(",@provider");
+  });
+
   it("creates encrypted vault exports and previews importability without mutating events", () => {
     const { repo, store, file } = createRepoWithStore();
     const auth = authorizeDevice(repo);
@@ -412,6 +436,11 @@ describe("TokSyncRepository", () => {
     expect(created).not.toBeNull();
     expect(created?.export.payloadDigest).toMatch(/^sha256:/);
     expect(created?.payload.format).toBe("toksync-vault-v1");
+    expect(created?.payload.keyDerivation.params).toEqual({
+      N: 65536,
+      r: 8,
+      p: 1,
+    });
     const encrypted = JSON.stringify(created?.payload);
     expect(encrypted).not.toContain(secretPath);
     expect(encrypted).not.toContain("private-session-id");

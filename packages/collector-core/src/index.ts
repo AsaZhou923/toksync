@@ -477,10 +477,14 @@ function normalizeTokens(record: Record<string, unknown>, source: string) {
       tokens.cache_read_input_tokens,
       tokens.cached_input_tokens,
     ) ?? 0;
-  const input =
-    source === "codex" && hasInclusiveCachedInput(tokens)
-      ? Math.max(rawInput - Math.min(rawInput, cacheRead), 0)
-      : rawInput;
+  const hasCodexInclusiveCachedInput =
+    source === "codex" && hasInclusiveCachedInput(tokens);
+  const normalizedCacheRead = hasCodexInclusiveCachedInput
+    ? Math.min(rawInput, cacheRead)
+    : cacheRead;
+  const input = hasCodexInclusiveCachedInput
+    ? Math.max(rawInput - normalizedCacheRead, 0)
+    : rawInput;
 
   return {
     input,
@@ -492,7 +496,7 @@ function normalizeTokens(record: Record<string, unknown>, source: string) {
         tokens.completion_tokens,
         tokens.completionTokens,
       ) ?? 0,
-    cacheRead,
+    cacheRead: normalizedCacheRead,
     cacheWrite:
       numberValue(
         tokens.cacheWrite,

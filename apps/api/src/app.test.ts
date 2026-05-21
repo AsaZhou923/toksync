@@ -191,6 +191,36 @@ describe("TokSync API", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).not.toBe("*");
   });
 
+  it("adds request ids, emits structured request logs and rejects oversized bodies", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-api-logged-"));
+    const repo = new TokSyncRepository(
+      new FileTokSyncStore(path.join(dir, "db.json")),
+    );
+    const logs: any[] = [];
+    const api = createApiApp({ repo, logger: (entry) => logs.push(entry) });
+
+    const health = await api.request("/health", {
+      headers: { "X-Request-Id": "req-test" },
+    });
+    const oversized = await api.request("/v1/auth/device/start", {
+      method: "POST",
+      body: "x".repeat(1 * 1024 * 1024 + 1),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(health.headers.get("X-Request-Id")).toBe("req-test");
+    expect(logs[0]).toMatchObject({
+      requestId: "req-test",
+      method: "GET",
+      path: "/health",
+      status: 200,
+    });
+    expect(oversized.status).toBe(413);
+    expect(await json<any>(oversized)).toMatchObject({
+      error: { code: "payload_too_large" },
+    });
+  });
+
   it("does not trust dev user headers when dev auth is disabled", async () => {
     const { api, repo } = lockedContext();
     repo.ensureUser("alice");
@@ -225,10 +255,12 @@ describe("TokSync API", () => {
 
   it("authenticates hosted users through GitHub OAuth session cookies", async () => {
     const calls: string[] = [];
-    const githubFetch: typeof fetch = async (input) => {
+    const tokenBodies: URLSearchParams[] = [];
+    const githubFetch: typeof fetch = async (input, init) => {
       const url = String(input);
       calls.push(url);
       if (url.endsWith("/access_token")) {
+        tokenBodies.push(init?.body as URLSearchParams);
         return Response.json({ access_token: "gho_test" });
       }
       if (url.endsWith("/user")) {
@@ -270,6 +302,10 @@ describe("TokSync API", () => {
 
     expect(start.status).toBe(302);
     expect(location).toContain("client_id=client-id");
+    expect(new URL(location).searchParams.get("code_challenge")).toBeTruthy();
+    expect(new URL(location).searchParams.get("code_challenge_method")).toBe(
+      "S256",
+    );
     expect(state).toBeTruthy();
     expect(stateCookie).toContain("toksync_oauth_state=");
 
@@ -293,6 +329,7 @@ describe("TokSync API", () => {
       "https://api.github.example/user",
       "https://api.github.example/user/emails",
     ]);
+    expect(tokenBodies[0]?.get("code_verifier")).toBeTruthy();
     expect(session.user).toMatchObject({
       username: "octocat",
       displayName: "Octo Cat",
@@ -1168,6 +1205,11 @@ describe("TokSync API", () => {
       }),
     );
     expect(created.export.payloadDigest).toMatch(/^sha256:/);
+    expect(created.payload.keyDerivation.params).toEqual({
+      N: 65536,
+      r: 8,
+      p: 1,
+    });
     const encrypted = JSON.stringify(created.payload);
     expect(encrypted).not.toContain("vault-session-id");
     expect(encrypted).not.toContain("vault-message-id");
@@ -1224,6 +1266,38 @@ describe("TokSync API", () => {
         )
       ).totals.tokens,
     ).toBe(157);
+
+    const wrongPassphrase = await api.request("/v1/vault/imports/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        payload: created.payload,
+        recoveryPassphrase: "portable-vault-wrong-passphrase",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "demo",
+      },
+    });
+    const tamperedDigest = await api.request("/v1/vault/imports/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        payload: { ...created.payload, payloadDigest: "sha256:tampered" },
+        recoveryPassphrase,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-TokSync-User": "demo",
+      },
+    });
+
+    expect(wrongPassphrase.status).toBe(400);
+    expect(await json<any>(wrongPassphrase)).toMatchObject({
+      error: { code: "invalid_payload" },
+    });
+    expect(tamperedDigest.status).toBe(400);
+    expect(await json<any>(tamperedDigest)).toMatchObject({
+      error: { code: "invalid_payload" },
+    });
 
     const { api: targetApi } = testContext();
     const imported = await json<any>(

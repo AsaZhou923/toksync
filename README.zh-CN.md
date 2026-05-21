@@ -11,7 +11,7 @@ TokSync v0.4 是面向 AI coding 工具的 metrics-only telemetry hub。它跨�
 - CLI agent：`login`、`logout`、`status`、`sources list`、`sync --dry-run`、`sync`，并支持 `tsk_` user API token/headless sync。
 - Collector：Codex CLI、Claude Code、OpenCode、Cursor usage CSV、GitHub Copilot OTEL JSONL、Gemini CLI tmp chat JSON/JSONL、OpenClaw session/SDK usage logs。
 - API：GitHub OAuth、设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、leaderboard opt-in、metrics JSON/CSV export、Private Usage Vault、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card。
-- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、exports/local viewer、usage vault、models、projects、sync runs、embed、settings、docs、公开 profile。
+- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、exports/local viewer、usage vault、models、projects、sync runs、embed、settings、docs、公开 profile，并启用 CSP/安全响应头。
 - Storage：本地默认 `FileTokSyncStore`；hosted SQL shape 已包含 `vault_exports` ledger。设置 `TOKSYNC_VAULT_ARTIFACT_DIR` 后，vault artifact 可写入私有对象目录，ledger 只保存 storage key 和 digest。
 - 测试：Vitest、Playwright E2E、visual smoke、perf smoke、Turbo typecheck/lint/build。
 
@@ -61,7 +61,7 @@ TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 - cost 是估算，不是 provider billing truth。
 - Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。
 - leaderboard 需要先开启 public profile，再单独 opt-in，并且只读取 public aggregate cache；排行榜范围只做全局榜。
-- Private Usage Vault 使用用户 recovery passphrase 加密 metrics-only artifact，支持下载、preview 和跨实例 import；不导出正文或工具 payload。
+- Private Usage Vault 使用至少 16 字符的用户 recovery passphrase 加密 metrics-only artifact，新导出记录显式 scrypt 参数，支持下载、preview 和跨实例 import；不导出正文或工具 payload。
 - content sync、search、eval export 和 Public Proof Pack 仍是后续 opt-in 能力。
 
 ## v0.4 范围
@@ -91,6 +91,7 @@ pnpm check:boundaries
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm test:e2e
 pnpm test:visual

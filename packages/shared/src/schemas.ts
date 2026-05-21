@@ -125,13 +125,17 @@ export const localPreviewInputSchema = z.object({
 });
 
 export const vaultFormatSchema = z.literal("toksync-vault-v1");
+const vaultExportPassphraseSchema = z
+  .string()
+  .min(16, "Recovery passphrase must be at least 16 characters");
+const vaultImportPassphraseSchema = z.string().min(12);
 
 export const vaultExportInputSchema = z.object({
   format: vaultFormatSchema.default("toksync-vault-v1"),
   includePublicCache: z.boolean().default(true),
   includeReceipts: z.boolean().default(true),
   includeContent: z.boolean().default(false),
-  recoveryPassphrase: z.string().min(12),
+  recoveryPassphrase: vaultExportPassphraseSchema,
 });
 
 export const vaultEncryptedPayloadSchema = z.object({
@@ -148,6 +152,13 @@ export const vaultEncryptedPayloadSchema = z.object({
     algorithm: z.literal("scrypt"),
     salt: z.string().min(1),
     keyLength: z.literal(32),
+    params: z
+      .object({
+        N: z.number().int().positive(),
+        r: z.number().int().positive(),
+        p: z.number().int().positive(),
+      })
+      .optional(),
   }),
   encryption: z.object({
     algorithm: z.literal("aes-256-gcm"),
@@ -159,7 +170,7 @@ export const vaultEncryptedPayloadSchema = z.object({
 
 export const vaultImportPreviewInputSchema = z.object({
   payload: vaultEncryptedPayloadSchema,
-  recoveryPassphrase: z.string().min(12),
+  recoveryPassphrase: vaultImportPassphraseSchema,
 });
 export const vaultImportInputSchema = vaultImportPreviewInputSchema;
 

@@ -62,6 +62,19 @@ import type {
   VaultExportRecord,
 } from "./types";
 
+const DEVICE_CODE_TTL_SECONDS = 15 * 60;
+const DEVICE_CODE_POLL_INTERVAL_SECONDS = 2;
+const COST_SPIKE_BASELINE_DAYS = 7;
+const COST_SPIKE_MULTIPLIER = 2;
+const COST_SPIKE_MIN_DELTA_USD = 1;
+interface VaultScryptParams {
+  N: number;
+  r: number;
+  p: number;
+}
+
+const VAULT_SCRYPT_PARAMS: VaultScryptParams = { N: 65_536, r: 8, p: 1 };
+
 export interface RepositorySecrets {
   tokenHashSecret: string;
   deviceCodeSecret: string;
@@ -333,7 +346,9 @@ export class TokSyncRepository {
       platform: input.platform,
       agentVersion: input.agentVersion,
       deviceFingerprintHash: this.hashDeviceFingerprint(fingerprint),
-      expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+      expiresAt: new Date(
+        now.getTime() + DEVICE_CODE_TTL_SECONDS * 1000,
+      ).toISOString(),
       createdAt: now.toISOString(),
     });
     this.store.write(data);
@@ -341,8 +356,8 @@ export class TokSyncRepository {
       deviceCode,
       userCode,
       verificationUrl: `${process.env.APP_URL || "http://localhost:3000"}/device`,
-      expiresIn: 900,
-      interval: 2,
+      expiresIn: DEVICE_CODE_TTL_SECONDS,
+      interval: DEVICE_CODE_POLL_INTERVAL_SECONDS,
     };
   }
 
@@ -2261,14 +2276,17 @@ function detectCostSpike(
   const baselineDates = [...dailyCosts.keys()]
     .filter((date) => date < latestDate)
     .sort()
-    .slice(-7);
+    .slice(-COST_SPIKE_BASELINE_DAYS);
   if (!baselineDates.length) return null;
 
   const baselineAverage =
     baselineDates.reduce((sum, date) => sum + (dailyCosts.get(date) ?? 0), 0) /
     baselineDates.length;
   if (baselineAverage <= 0) return null;
-  if (latestCost < baselineAverage * 2 || latestCost - baselineAverage < 1) {
+  if (
+    latestCost < baselineAverage * COST_SPIKE_MULTIPLIER ||
+    latestCost - baselineAverage < COST_SPIKE_MIN_DELTA_USD
+  ) {
     return null;
   }
 
@@ -2506,7 +2524,7 @@ function encryptVaultPayload(
   const plainText = JSON.stringify(snapshot);
   const iv = randomBytes(12);
   const salt = randomBytes(16);
-  const key = deriveVaultKey(recoveryPassphrase, salt);
+  const key = deriveVaultKey(recoveryPassphrase, salt, VAULT_SCRYPT_PARAMS);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([
     cipher.update(plainText, "utf8"),
@@ -2534,6 +2552,7 @@ function encryptVaultPayload(
       algorithm: "scrypt",
       salt: salt.toString("base64url"),
       keyLength: 32,
+      params: VAULT_SCRYPT_PARAMS,
     },
     encryption: {
       algorithm: "aes-256-gcm",
@@ -2556,7 +2575,11 @@ function decryptVaultPayload(
   const iv = Buffer.from(payload.encryption.iv, "base64url");
   const authTag = Buffer.from(payload.encryption.authTag, "base64url");
   const salt = Buffer.from(payload.keyDerivation.salt, "base64url");
-  const key = deriveVaultKey(recoveryPassphrase, salt);
+  const key = deriveVaultKey(
+    recoveryPassphrase,
+    salt,
+    payload.keyDerivation.params,
+  );
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(authTag);
   const plainText = Buffer.concat([
@@ -2566,8 +2589,18 @@ function decryptVaultPayload(
   return JSON.parse(plainText) as unknown;
 }
 
-function deriveVaultKey(recoveryPassphrase: string, salt: Buffer) {
-  return scryptSync(recoveryPassphrase, salt, 32);
+function deriveVaultKey(
+  recoveryPassphrase: string,
+  salt: Buffer,
+  params?: VaultScryptParams,
+) {
+  if (!params) return scryptSync(recoveryPassphrase, salt, 32);
+  return scryptSync(recoveryPassphrase, salt, 32, {
+    N: params.N,
+    r: params.r,
+    p: params.p,
+    maxmem: 128 * params.N * params.r * 2,
+  });
 }
 
 function parseVaultPayload(rawPayload: unknown, recoveryPassphrase: string) {
@@ -2796,7 +2829,10 @@ function toCsv(rows: Array<ReturnType<typeof metricsExportRow>>) {
 }
 
 function csvCell(value: string | number | boolean) {
-  const raw = String(value);
+  const raw =
+    typeof value === "string" && /^[=+\-@\t\r]/.test(value)
+      ? `'${value}`
+      : String(value);
   return /[",\n]/.test(raw) ? `"${raw.replaceAll('"', '""')}"` : raw;
 }
 

@@ -106,6 +106,11 @@ describe("UsageEventV1 schema", () => {
       includeContent: false,
       recoveryPassphrase: "portable-vault-passphrase",
     });
+    expect(
+      vaultExportInputSchema.safeParse({
+        recoveryPassphrase: "too-short-12",
+      }).success,
+    ).toBe(false);
 
     const payload = vaultEncryptedPayloadSchema.parse({
       format: "toksync-vault-v1",
@@ -121,6 +126,7 @@ describe("UsageEventV1 schema", () => {
         algorithm: "scrypt",
         salt: "salt",
         keyLength: 32,
+        params: { N: 65536, r: 8, p: 1 },
       },
       encryption: {
         algorithm: "aes-256-gcm",
@@ -132,7 +138,7 @@ describe("UsageEventV1 schema", () => {
     expect(
       vaultImportPreviewInputSchema.parse({
         payload,
-        recoveryPassphrase: "portable-vault-passphrase",
+        recoveryPassphrase: "short-enough",
       }).payload.payloadDigest,
     ).toBe("sha256:test");
   });
