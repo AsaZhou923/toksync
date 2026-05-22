@@ -1,13 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  randomUUID,
-  scryptSync,
-  timingSafeEqual,
-} from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   apiError,
   costGuardrailInputSchema,
@@ -17,7 +8,6 @@ import {
   SOURCE_REGISTRY,
   publicProfileInputSchema,
   totalTokens,
-  vaultEncryptedPayloadSchema,
   vaultExportInputSchema,
   vaultImportInputSchema,
   type CostGuardrailInput,
@@ -61,19 +51,24 @@ import type {
   UserApiTokenRecord,
   VaultExportRecord,
 } from "./types";
+import {
+  encryptVaultPayload,
+  ensureVaultImportDevices,
+  previewStoredEvent,
+  resolveVaultArtifactStore,
+  parseVaultPayload,
+  vaultExportView,
+  vaultPublicProfileStats,
+  vaultSnapshotEvent,
+  type VaultArtifactStore,
+} from "./vault";
+export { FileVaultArtifactStore, type VaultArtifactStore } from "./vault";
 
-const DEVICE_CODE_TTL_SECONDS = 15 * 60;
+const DEFAULT_DEVICE_CODE_TTL_SECONDS = 15 * 60;
 const DEVICE_CODE_POLL_INTERVAL_SECONDS = 2;
 const COST_SPIKE_BASELINE_DAYS = 7;
 const COST_SPIKE_MULTIPLIER = 2;
 const COST_SPIKE_MIN_DELTA_USD = 1;
-interface VaultScryptParams {
-  N: number;
-  r: number;
-  p: number;
-}
-
-const VAULT_SCRYPT_PARAMS: VaultScryptParams = { N: 65_536, r: 8, p: 1 };
 
 export interface RepositorySecrets {
   tokenHashSecret: string;
@@ -81,65 +76,59 @@ export interface RepositorySecrets {
   deviceFingerprintPepper: string;
 }
 
-export interface VaultArtifactStore {
-  put(params: {
-    userId: string;
-    exportId: string;
-    payload: VaultEncryptedPayload;
-  }): string;
-  get(storageKey: string): VaultEncryptedPayload | null;
-}
-
-export class FileVaultArtifactStore implements VaultArtifactStore {
-  constructor(
-    public readonly rootDir = process.env.TOKSYNC_VAULT_ARTIFACT_DIR ||
-      path.resolve(
-        process.env.INIT_CWD || process.cwd(),
-        ".tmp",
-        "vault-artifacts",
-      ),
-  ) {}
-
-  put(params: {
-    userId: string;
-    exportId: string;
-    payload: VaultEncryptedPayload;
-  }) {
-    const storageKey = vaultArtifactStorageKey(params.userId, params.exportId);
-    const filePath = this.pathForKey(storageKey);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, `${JSON.stringify(params.payload)}\n`);
-    return storageKey;
-  }
-
-  get(storageKey: string) {
-    const filePath = this.pathForKey(storageKey);
-    if (!fs.existsSync(filePath)) return null;
-    const parsed = vaultEncryptedPayloadSchema.safeParse(
-      JSON.parse(fs.readFileSync(filePath, "utf8")),
-    );
-    return parsed.success ? parsed.data : null;
-  }
-
-  private pathForKey(storageKey: string) {
-    if (!/^vault\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.json$/.test(storageKey)) {
-      throw new Error("Invalid vault artifact storage key");
-    }
-    const root = path.resolve(this.rootDir);
-    const filePath = path.resolve(root, storageKey);
-    const relative = path.relative(root, filePath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("Vault artifact key escapes storage root");
-    }
-    return filePath;
-  }
-}
-
 export interface AuthContext {
   user: UserRecord;
   device: DeviceRecord;
   token: DeviceTokenRecord;
 }
+
+interface IngestUsageBatchResponse {
+  runId: string;
+  status: "accepted" | "rejected";
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ index: number; code: string; message: string }>;
+  rollupStatus: "completed";
+}
+
+type IngestUsageBatchResult =
+  | {
+      ok: false;
+      response: ReturnType<typeof apiError>;
+      status: number;
+    }
+  | {
+      ok: true;
+      response: IngestUsageBatchResponse;
+      status: 200;
+    };
+
+type DevicePollResult =
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "consumed" }
+  | { status: "pending"; interval: number }
+  | {
+      status: "authorized";
+      deviceId: string;
+      deviceToken: string;
+      scopes: DeviceTokenRecord["scopes"];
+      username: string;
+    };
+
+type LeaderboardOptInResult =
+  | null
+  | {
+      ok: false;
+      code: "public_profile_required";
+      message: string;
+    }
+  | {
+      ok: true;
+      enabled: boolean;
+      nextSnapshotAt: string;
+    };
 
 export interface UserApiTokenAuthContext {
   user: UserRecord;
@@ -181,18 +170,14 @@ function requireSecret(name: keyof NodeJS.ProcessEnv) {
   return value;
 }
 
-function resolveVaultArtifactStore(): VaultArtifactStore | null {
-  return process.env.TOKSYNC_VAULT_ARTIFACT_DIR
-    ? new FileVaultArtifactStore(process.env.TOKSYNC_VAULT_ARTIFACT_DIR)
-    : null;
-}
-
-function vaultArtifactStorageKey(userId: string, exportId: string) {
-  return `vault/${safeStorageSegment(userId)}/${safeStorageSegment(exportId)}.json`;
-}
-
-function safeStorageSegment(value: string) {
-  return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 128) || "unknown";
+function deviceCodeTtlSeconds() {
+  const raw = process.env.DEVICE_CODE_TTL_SECONDS;
+  if (!raw) return DEFAULT_DEVICE_CODE_TTL_SECONDS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_DEVICE_CODE_TTL_SECONDS;
+  }
+  return parsed;
 }
 
 function githubUsername(username: string) {
@@ -254,32 +239,10 @@ export class TokSyncRepository {
   }
 
   ensureUser(username: string, patch: Partial<UserRecord> = {}) {
-    const lower = normalizeUsername(username);
-    if (!isValidUsername(username))
-      throw new Error(`Invalid username: ${username}`);
-    const data = this.store.read();
-    let user = data.users.find((item) => item.usernameLower === lower);
-    const now = new Date().toISOString();
-    if (!user) {
-      user = {
-        id: randomUUID(),
-        username,
-        usernameLower: lower,
-        publicProfileEnabled: false,
-        showCost: false,
-        showSourceBreakdown: false,
-        showModelBreakdown: false,
-        showWorkspaceBreakdown: false,
-        createdAt: now,
-        updatedAt: now,
-        ...patch,
-      };
-      data.users.push(user);
-    } else {
-      Object.assign(user, patch, { updatedAt: now });
-    }
-    this.store.write(data);
-    return user;
+    return this.store.transaction((data) => ({
+      commit: true,
+      result: this.ensureUserInData(data, username, patch),
+    }));
   }
 
   getUser(username = "demo") {
@@ -288,208 +251,223 @@ export class TokSyncRepository {
   }
 
   ensureGitHubUser(profile: GitHubUserProfile) {
-    const data = this.store.read();
-    const now = new Date().toISOString();
-    const preferredUsername = githubUsername(profile.username);
-    let user = data.users.find((item) => item.githubId === profile.githubId);
-    user ??= data.users.find(
-      (item) =>
-        item.usernameLower === normalizeUsername(preferredUsername) &&
-        !item.githubId,
-    );
-    if (!user) {
-      const username = uniqueGitHubUsername(
-        data,
-        preferredUsername,
-        profile.githubId,
+    return this.store.transaction((data) => {
+      const now = new Date().toISOString();
+      const preferredUsername = githubUsername(profile.username);
+      let user = data.users.find((item) => item.githubId === profile.githubId);
+      user ??= data.users.find(
+        (item) =>
+          item.usernameLower === normalizeUsername(preferredUsername) &&
+          !item.githubId,
       );
-      user = {
-        id: randomUUID(),
-        username,
-        usernameLower: normalizeUsername(username),
-        publicProfileEnabled: false,
-        showCost: false,
-        showSourceBreakdown: false,
-        showModelBreakdown: false,
-        showWorkspaceBreakdown: false,
-        createdAt: now,
+      if (!user) {
+        const username = uniqueGitHubUsername(
+          data,
+          preferredUsername,
+          profile.githubId,
+        );
+        user = {
+          id: randomUUID(),
+          username,
+          usernameLower: normalizeUsername(username),
+          publicProfileEnabled: false,
+          showCost: false,
+          showSourceBreakdown: false,
+          showModelBreakdown: false,
+          showWorkspaceBreakdown: false,
+          createdAt: now,
+          updatedAt: now,
+        };
+        data.users.push(user);
+      }
+      Object.assign(user, {
+        githubId: profile.githubId,
+        username: user.username,
+        usernameLower: normalizeUsername(user.username),
         updatedAt: now,
-      };
-      data.users.push(user);
-    }
-    Object.assign(user, {
-      githubId: profile.githubId,
-      username: user.username,
-      usernameLower: normalizeUsername(user.username),
-      updatedAt: now,
+      });
+      if (profile.email) user.email = profile.email;
+      if (profile.displayName) user.displayName = profile.displayName;
+      if (profile.avatarUrl) user.avatarUrl = profile.avatarUrl;
+      return { commit: true, result: user };
     });
-    if (profile.email) user.email = profile.email;
-    if (profile.displayName) user.displayName = profile.displayName;
-    if (profile.avatarUrl) user.avatarUrl = profile.avatarUrl;
-    this.store.write(data);
-    return user;
   }
 
   createDeviceCode(input: DeviceStartInput) {
-    const data = this.store.read();
-    pruneDeviceCodesInData(data);
-    const deviceCode = `dev_${randomBytes(24).toString("base64url")}`;
-    const userCode = `TS-${randomBytes(2).toString("hex").toUpperCase()}`;
-    const now = new Date();
-    const fingerprint =
-      input.deviceFingerprint || randomBytes(32).toString("base64url");
-    data.deviceCodes.push({
-      id: randomUUID(),
-      deviceCodeHash: this.hashDeviceCode(deviceCode),
-      userCode,
-      deviceName: input.deviceName,
-      platform: input.platform,
-      agentVersion: input.agentVersion,
-      deviceFingerprintHash: this.hashDeviceFingerprint(fingerprint),
-      expiresAt: new Date(
-        now.getTime() + DEVICE_CODE_TTL_SECONDS * 1000,
-      ).toISOString(),
-      createdAt: now.toISOString(),
+    return this.store.transaction((data) => {
+      pruneDeviceCodesInData(data);
+      const deviceCode = `dev_${randomBytes(24).toString("base64url")}`;
+      const userCode = `TS-${randomBytes(2).toString("hex").toUpperCase()}`;
+      const now = new Date();
+      const ttlSeconds = deviceCodeTtlSeconds();
+      const fingerprint =
+        input.deviceFingerprint || randomBytes(32).toString("base64url");
+      data.deviceCodes.push({
+        id: randomUUID(),
+        deviceCodeHash: this.hashDeviceCode(deviceCode),
+        userCode,
+        deviceName: input.deviceName,
+        platform: input.platform,
+        agentVersion: input.agentVersion,
+        deviceFingerprintHash: this.hashDeviceFingerprint(fingerprint),
+        expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
+        createdAt: now.toISOString(),
+      });
+      return {
+        commit: true,
+        result: {
+          deviceCode,
+          userCode,
+          verificationUrl: `${process.env.APP_URL || "http://localhost:3000"}/device`,
+          expiresIn: ttlSeconds,
+          interval: DEVICE_CODE_POLL_INTERVAL_SECONDS,
+        },
+      };
     });
-    this.store.write(data);
-    return {
-      deviceCode,
-      userCode,
-      verificationUrl: `${process.env.APP_URL || "http://localhost:3000"}/device`,
-      expiresIn: DEVICE_CODE_TTL_SECONDS,
-      interval: DEVICE_CODE_POLL_INTERVAL_SECONDS,
-    };
   }
 
   authorizeDeviceCode(userCode: string, username = "demo") {
-    const data = this.store.read();
-    const pruned = pruneDeviceCodesInData(data);
-    const code = data.deviceCodes.find(
-      (item) => item.userCode.toUpperCase() === userCode.toUpperCase(),
-    );
-    if (!code) {
-      if (pruned) this.store.write(data);
-      return null;
-    }
-    if (Date.parse(code.expiresAt) < Date.now()) {
-      if (pruned) this.store.write(data);
-      return null;
-    }
-    if (code.consumedAt) return null;
-    const user = this.ensureUser(username, {
-      displayName: username === "demo" ? "Demo Developer" : username,
+    return this.store.transaction((data) => {
+      const pruned = pruneDeviceCodesInData(data);
+      const code = data.deviceCodes.find(
+        (item) => item.userCode.toUpperCase() === userCode.toUpperCase(),
+      );
+      if (!code) return { commit: pruned, result: null };
+      if (Date.parse(code.expiresAt) < Date.now()) {
+        return { commit: pruned, result: null };
+      }
+      if (code.consumedAt) return { commit: pruned, result: null };
+      const user = this.ensureUserInData(data, username, {
+        displayName: username === "demo" ? "Demo Developer" : username,
+      });
+      code.authorizedUserId = user.id;
+      return {
+        commit: true,
+        result: { status: "authorized", username: user.username },
+      };
     });
-    code.authorizedUserId = user.id;
-    this.store.write(data);
-    return { status: "authorized", username: user.username };
   }
 
-  pollDeviceCode(deviceCode: string) {
-    const data = this.store.read();
-    const pruned = pruneDeviceCodesInData(data);
-    const code = data.deviceCodes.find(
-      (item) => item.deviceCodeHash === this.hashDeviceCode(deviceCode),
-    );
-    if (!code) {
-      if (pruned) this.store.write(data);
-      return { status: "not_found" as const };
-    }
-    if (Date.parse(code.expiresAt) < Date.now())
-      return { status: "expired" as const };
-    if (code.consumedAt) return { status: "consumed" as const };
-    if (!code.authorizedUserId)
-      return { status: "pending" as const, interval: 2 };
+  pollDeviceCode(deviceCode: string): DevicePollResult {
+    return this.store.transaction<DevicePollResult>((data) => {
+      const pruned = pruneDeviceCodesInData(data);
+      const code = data.deviceCodes.find(
+        (item) => item.deviceCodeHash === this.hashDeviceCode(deviceCode),
+      );
+      if (!code) {
+        return { commit: pruned, result: { status: "not_found" as const } };
+      }
+      if (Date.parse(code.expiresAt) < Date.now()) {
+        return { commit: pruned, result: { status: "expired" as const } };
+      }
+      if (code.consumedAt) {
+        return { commit: pruned, result: { status: "consumed" as const } };
+      }
+      if (!code.authorizedUserId) {
+        return {
+          commit: pruned,
+          result: { status: "pending" as const, interval: 2 },
+        };
+      }
 
-    const user = data.users.find((item) => item.id === code.authorizedUserId);
-    if (!user) return { status: "not_found" as const };
+      const user = data.users.find((item) => item.id === code.authorizedUserId);
+      if (!user) {
+        return { commit: pruned, result: { status: "not_found" as const } };
+      }
 
-    let device = data.devices.find(
-      (item) =>
-        item.userId === user.id &&
-        item.deviceFingerprintHash === code.deviceFingerprintHash,
-    );
-    const now = new Date().toISOString();
-    if (!device) {
-      device = {
+      let device = data.devices.find(
+        (item) =>
+          item.userId === user.id &&
+          item.deviceFingerprintHash === code.deviceFingerprintHash,
+      );
+      const now = new Date().toISOString();
+      if (!device) {
+        device = {
+          id: randomUUID(),
+          userId: user.id,
+          deviceFingerprintHash: code.deviceFingerprintHash,
+          name: code.deviceName,
+          platform: code.platform,
+          agentVersion: code.agentVersion,
+          lastSeenAt: now,
+          createdAt: now,
+          updatedAt: now,
+        };
+        data.devices.push(device);
+      } else {
+        Object.assign(device, {
+          name: code.deviceName,
+          platform: code.platform,
+          agentVersion: code.agentVersion,
+          lastSeenAt: now,
+          revokedAt: undefined,
+          updatedAt: now,
+        });
+      }
+
+      const rawToken = `tsd_${randomBytes(32).toString("base64url")}`;
+      const token: DeviceTokenRecord = {
         id: randomUUID(),
         userId: user.id,
-        deviceFingerprintHash: code.deviceFingerprintHash,
-        name: code.deviceName,
-        platform: code.platform,
-        agentVersion: code.agentVersion,
-        lastSeenAt: now,
+        deviceId: device.id,
+        tokenHash: this.hashToken(rawToken),
+        scopes: ["usage:write", "device:read"],
         createdAt: now,
-        updatedAt: now,
       };
-      data.devices.push(device);
-    } else {
-      Object.assign(device, {
-        name: code.deviceName,
-        platform: code.platform,
-        agentVersion: code.agentVersion,
-        lastSeenAt: now,
-        revokedAt: undefined,
-        updatedAt: now,
-      });
-    }
-
-    const rawToken = `tsd_${randomBytes(32).toString("base64url")}`;
-    const token: DeviceTokenRecord = {
-      id: randomUUID(),
-      userId: user.id,
-      deviceId: device.id,
-      tokenHash: this.hashToken(rawToken),
-      scopes: ["usage:write", "device:read"],
-      createdAt: now,
-    };
-    data.deviceTokens.push(token);
-    code.consumedAt = now;
-    this.store.write(data);
-    return {
-      status: "authorized" as const,
-      deviceId: device.id,
-      deviceToken: rawToken,
-      scopes: token.scopes,
-      username: user.username,
-    };
+      data.deviceTokens.push(token);
+      code.consumedAt = now;
+      return {
+        commit: true,
+        result: {
+          status: "authorized" as const,
+          deviceId: device.id,
+          deviceToken: rawToken,
+          scopes: token.scopes,
+          username: user.username,
+        },
+      };
+    });
   }
 
   authenticateDevice(rawToken?: string | null): AuthContext | null {
     if (!rawToken?.startsWith("tsd_")) return null;
-    const data = this.store.read();
-    const tokenHash = this.hashToken(rawToken);
-    const token = data.deviceTokens.find((item) =>
-      constantTimeEqual(item.tokenHash, tokenHash),
-    );
-    if (!token || token.revokedAt) return null;
-    const device = data.devices.find((item) => item.id === token.deviceId);
-    const user = data.users.find((item) => item.id === token.userId);
-    if (!device || !user || device.revokedAt) return null;
-    const now = new Date().toISOString();
-    token.lastUsedAt = now;
-    device.lastSeenAt = now;
-    device.updatedAt = now;
-    this.store.write(data);
-    return { user, device, token };
+    return this.store.transaction<AuthContext | null>((data) => {
+      const tokenHash = this.hashToken(rawToken);
+      const token = data.deviceTokens.find((item) =>
+        constantTimeEqual(item.tokenHash, tokenHash),
+      );
+      if (!token || token.revokedAt) return { commit: false, result: null };
+      const device = data.devices.find((item) => item.id === token.deviceId);
+      const user = data.users.find((item) => item.id === token.userId);
+      if (!device || !user || device.revokedAt) {
+        return { commit: false, result: null };
+      }
+      const now = new Date().toISOString();
+      token.lastUsedAt = now;
+      device.lastSeenAt = now;
+      device.updatedAt = now;
+      return { commit: true, result: { user, device, token } };
+    });
   }
 
   authenticateUserApiToken(
     rawToken?: string | null,
   ): UserApiTokenAuthContext | null {
     if (!rawToken?.startsWith("tsk_")) return null;
-    const data = this.store.read();
-    const tokenHash = this.hashToken(rawToken);
-    const token = data.userApiTokens.find((item) =>
-      constantTimeEqual(item.tokenHash, tokenHash),
-    );
-    if (!token || token.revokedAt) return null;
-    if (token.expiresAt && Date.parse(token.expiresAt) < Date.now())
-      return null;
-    const user = data.users.find((item) => item.id === token.userId);
-    if (!user) return null;
-    token.lastUsedAt = new Date().toISOString();
-    this.store.write(data);
-    return { user, token };
+    return this.store.transaction<UserApiTokenAuthContext | null>((data) => {
+      const tokenHash = this.hashToken(rawToken);
+      const token = data.userApiTokens.find((item) =>
+        constantTimeEqual(item.tokenHash, tokenHash),
+      );
+      if (!token || token.revokedAt) return { commit: false, result: null };
+      if (token.expiresAt && Date.parse(token.expiresAt) < Date.now()) {
+        return { commit: false, result: null };
+      }
+      const user = data.users.find((item) => item.id === token.userId);
+      if (!user) return { commit: false, result: null };
+      token.lastUsedAt = new Date().toISOString();
+      return { commit: true, result: { user, token } };
+    });
   }
 
   listUserApiTokens(username = "demo") {
@@ -504,36 +482,39 @@ export class TokSyncRepository {
 
   createUserApiToken(username: string, rawInput: UserApiTokenInput) {
     const input = userApiTokenInputSchema.parse(rawInput);
-    const data = this.store.read();
-    const user = this.ensureUser(username);
-    const now = new Date().toISOString();
-    const rawToken = `tsk_${randomBytes(32).toString("base64url")}`;
-    const token: UserApiTokenRecord = {
-      id: randomUUID(),
-      userId: user.id,
-      name: input.name,
-      tokenHash: this.hashToken(rawToken),
-      scopes: [...new Set(input.scopes)],
-      createdAt: now,
-    };
-    if (input.expiresAt) token.expiresAt = input.expiresAt;
-    data.userApiTokens.push(token);
-    this.store.write(data);
-    return { token: rawToken, metadata: userApiTokenMetadataView(token) };
+    return this.store.transaction((data) => {
+      const user = this.ensureUserInData(data, username);
+      const now = new Date().toISOString();
+      const rawToken = `tsk_${randomBytes(32).toString("base64url")}`;
+      const token: UserApiTokenRecord = {
+        id: randomUUID(),
+        userId: user.id,
+        name: input.name,
+        tokenHash: this.hashToken(rawToken),
+        scopes: [...new Set(input.scopes)],
+        createdAt: now,
+      };
+      if (input.expiresAt) token.expiresAt = input.expiresAt;
+      data.userApiTokens.push(token);
+      return {
+        commit: true,
+        result: { token: rawToken, metadata: userApiTokenMetadataView(token) },
+      };
+    });
   }
 
   revokeUserApiToken(username: string, tokenId: string) {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    const token = user
-      ? data.userApiTokens.find(
-          (item) => item.userId === user.id && item.id === tokenId,
-        )
-      : undefined;
-    if (!user || !token) return null;
-    token.revokedAt = new Date().toISOString();
-    this.store.write(data);
-    return { status: "revoked" };
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      const token = user
+        ? data.userApiTokens.find(
+            (item) => item.userId === user.id && item.id === tokenId,
+          )
+        : undefined;
+      if (!user || !token) return { commit: false, result: null };
+      token.revokedAt = new Date().toISOString();
+      return { commit: true, result: { status: "revoked" } };
+    });
   }
 
   authSession(username = "demo") {
@@ -590,7 +571,10 @@ export class TokSyncRepository {
     };
   }
 
-  ingestUsageBatch(rawToken: string | undefined, rawPayload: unknown) {
+  ingestUsageBatch(
+    rawToken: string | undefined,
+    rawPayload: unknown,
+  ): IngestUsageBatchResult {
     const envelope = usageBatchV1Schema.safeParse(rawPayload);
     if (!envelope.success) {
       return {
@@ -618,159 +602,162 @@ export class TokSyncRepository {
       };
     }
 
-    const data = this.store.read();
     const batch = envelope.data;
-    const usageAuth = this.authenticateUsageWriter(data, rawToken, batch);
-    if (!usageAuth)
-      return {
-        ok: false as const,
-        response: apiError("invalid_auth", "Invalid or revoked write token"),
-        status: 401,
-      };
-    const { user, device } = usageAuth;
-    const now = new Date().toISOString();
-    let syncRun = data.syncRuns.find(
-      (run) =>
-        run.userId === user.id &&
-        run.deviceId === device.id &&
-        run.clientRunId === batch.runId,
-    );
-    if (!syncRun) {
-      syncRun = {
-        id: randomUUID(),
-        clientRunId: batch.runId,
-        userId: user.id,
-        deviceId: device.id,
-        mode: batch.mode,
-        status: "started",
-        sourceSummary: {},
-        insertedCount: 0,
-        updatedCount: 0,
-        skippedCount: 0,
-        errorCount: 0,
-        startedAt: now,
-      };
-      data.syncRuns.push(syncRun);
-    }
-
-    const errors: Array<{ index: number; code: string; message: string }> = [];
-    let inserted = 0;
-    let updated = 0;
-    let skipped = 0;
-    const sourceSummary: Record<string, number> = {};
-    const usageIndexes = buildUsageEventIndexes(data, user.id);
-
-    for (const [index, rawEvent] of batch.events.entries()) {
-      const parsed = usageEventV1Schema.safeParse(rawEvent);
-      if (!parsed.success) {
-        errors.push({
-          index,
-          code: "invalid_event",
-          message: parsed.error.issues[0]?.message || "Invalid event",
-        });
-        continue;
-      }
-      const event = parsed.data;
-      if (event.deviceId !== device.id || batch.device.id !== device.id) {
-        errors.push({
-          index,
-          code: "wrong_device",
-          message: "Event device does not match token device",
-        });
-        continue;
-      }
-
-      sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
-      const existing = findExistingUsageEvent(usageIndexes, user.id, event);
-      if (!existing) {
-        const stored = {
-          ...event,
-          id: randomUUID(),
-          userId: user.id,
-          syncRunId: syncRun.id,
-          createdAt: now,
-          updatedAt: now,
+    return this.store.transaction<IngestUsageBatchResult>((data) => {
+      const usageAuth = this.authenticateUsageWriter(data, rawToken, batch);
+      if (!usageAuth) {
+        return {
+          commit: false,
+          result: {
+            ok: false as const,
+            response: apiError(
+              "invalid_auth",
+              "Invalid or revoked write token",
+            ),
+            status: 401,
+          },
         };
-        data.usageEvents.push(stored);
-        indexUsageEvent(usageIndexes, stored);
-        inserted += 1;
-      } else if (existing.deviceId !== event.deviceId) {
-        skipped += 1;
-      } else if (
-        storedEventFingerprint(existing) !== storedEventFingerprint(event)
-      ) {
-        Object.assign(existing, event, {
-          syncRunId: syncRun.id,
-          updatedAt: now,
-        });
-        removeDuplicateUsageEvents(
-          data,
-          usageIndexes,
-          user.id,
-          event,
-          existing.id,
-        );
-        indexUsageEvent(usageIndexes, existing);
-        updated += 1;
-      } else {
-        removeDuplicateUsageEvents(
-          data,
-          usageIndexes,
-          user.id,
-          event,
-          existing.id,
-        );
-        skipped += 1;
       }
-    }
+      const { user, device } = usageAuth;
+      const now = new Date().toISOString();
+      let syncRun = data.syncRuns.find(
+        (run) =>
+          run.userId === user.id &&
+          run.deviceId === device.id &&
+          run.clientRunId === batch.runId,
+      );
+      if (!syncRun) {
+        syncRun = {
+          id: randomUUID(),
+          clientRunId: batch.runId,
+          userId: user.id,
+          deviceId: device.id,
+          mode: batch.mode,
+          status: "started",
+          sourceSummary: {},
+          insertedCount: 0,
+          updatedCount: 0,
+          skippedCount: 0,
+          errorCount: 0,
+          startedAt: now,
+        };
+        data.syncRuns.push(syncRun);
+      }
 
-    syncRun.status =
-      errors.length > 0 && inserted + updated + skipped > 0
-        ? "partial"
-        : errors.length > 0
-          ? "failed"
-          : "completed";
-    syncRun.sourceSummary = sourceSummary;
-    syncRun.insertedCount = inserted;
-    syncRun.updatedCount = updated;
-    syncRun.skippedCount = skipped;
-    syncRun.errorCount = errors.length;
-    syncRun.finishedAt = now;
-    device.lastSeenAt = now;
-    device.updatedAt = now;
-    this.recomputeUserInData(data, user.id);
-    const response: {
-      runId: string;
-      status: "accepted" | "rejected";
-      inserted: number;
-      updated: number;
-      skipped: number;
-      errors: Array<{ index: number; code: string; message: string }>;
-      rollupStatus: "completed";
-    } = {
-      runId: batch.runId,
-      status: syncRun.status === "failed" ? "rejected" : "accepted",
-      inserted,
-      updated,
-      skipped,
-      errors,
-      rollupStatus: "completed",
-    };
-    data.syncReceipts = data.syncReceipts.filter(
-      (receipt) => receipt.syncRunId !== syncRun.id,
-    );
-    data.syncReceipts.push(
-      buildSyncReceipt(user.id, device.id, batch, syncRun, response, now),
-    );
-    this.refreshSourceHealthInData(data, user.id, now);
-    this.refreshMergeIssuesInData(data, user.id, now);
-    this.store.write(data);
+      const errors: Array<{ index: number; code: string; message: string }> =
+        [];
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+      const sourceSummary: Record<string, number> = {};
+      const usageIndexes = buildUsageEventIndexes(data, user.id);
 
-    return {
-      ok: true as const,
-      response,
-      status: 200,
-    };
+      for (const [index, rawEvent] of batch.events.entries()) {
+        const parsed = usageEventV1Schema.safeParse(rawEvent);
+        if (!parsed.success) {
+          errors.push({
+            index,
+            code: "invalid_event",
+            message: parsed.error.issues[0]?.message || "Invalid event",
+          });
+          continue;
+        }
+        const event = parsed.data;
+        if (event.deviceId !== device.id || batch.device.id !== device.id) {
+          errors.push({
+            index,
+            code: "wrong_device",
+            message: "Event device does not match token device",
+          });
+          continue;
+        }
+
+        sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
+        const existing = findExistingUsageEvent(usageIndexes, user.id, event);
+        if (!existing) {
+          const stored = {
+            ...event,
+            id: randomUUID(),
+            userId: user.id,
+            syncRunId: syncRun.id,
+            createdAt: now,
+            updatedAt: now,
+          };
+          data.usageEvents.push(stored);
+          indexUsageEvent(usageIndexes, stored);
+          inserted += 1;
+        } else if (existing.deviceId !== event.deviceId) {
+          skipped += 1;
+        } else if (
+          storedEventFingerprint(existing) !== storedEventFingerprint(event)
+        ) {
+          Object.assign(existing, event, {
+            syncRunId: syncRun.id,
+            updatedAt: now,
+          });
+          removeDuplicateUsageEvents(
+            data,
+            usageIndexes,
+            user.id,
+            event,
+            existing.id,
+          );
+          indexUsageEvent(usageIndexes, existing);
+          updated += 1;
+        } else {
+          removeDuplicateUsageEvents(
+            data,
+            usageIndexes,
+            user.id,
+            event,
+            existing.id,
+          );
+          skipped += 1;
+        }
+      }
+
+      syncRun.status =
+        errors.length > 0 && inserted + updated + skipped > 0
+          ? "partial"
+          : errors.length > 0
+            ? "failed"
+            : "completed";
+      syncRun.sourceSummary = sourceSummary;
+      syncRun.insertedCount = inserted;
+      syncRun.updatedCount = updated;
+      syncRun.skippedCount = skipped;
+      syncRun.errorCount = errors.length;
+      syncRun.finishedAt = now;
+      device.lastSeenAt = now;
+      device.updatedAt = now;
+      this.recomputeUserInData(data, user.id);
+      const response: IngestUsageBatchResponse = {
+        runId: batch.runId,
+        status: syncRun.status === "failed" ? "rejected" : "accepted",
+        inserted,
+        updated,
+        skipped,
+        errors,
+        rollupStatus: "completed",
+      };
+      data.syncReceipts = data.syncReceipts.filter(
+        (receipt) => receipt.syncRunId !== syncRun.id,
+      );
+      data.syncReceipts.push(
+        buildSyncReceipt(user.id, device.id, batch, syncRun, response, now),
+      );
+      this.refreshSourceHealthInData(data, user.id, now);
+      this.refreshMergeIssuesInData(data, user.id, now);
+
+      return {
+        commit: true,
+        result: {
+          ok: true as const,
+          response,
+          status: 200,
+        },
+      };
+    });
   }
 
   dashboardSummary(username = "demo", filters: DashboardFilters = {}) {
@@ -883,100 +870,114 @@ export class TokSyncRepository {
   }
 
   sourceHealth(username = "demo") {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    if (!user) return [];
-    this.refreshSourceHealthInData(data, user.id, new Date().toISOString());
-    this.store.write(data);
-    return data.sourceHealthSnapshots
-      .filter((snapshot) => snapshot.userId === user.id)
-      .sort((a, b) => a.source.localeCompare(b.source))
-      .map(sourceHealthView);
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      if (!user) return { commit: false, result: [] };
+      this.refreshSourceHealthInData(data, user.id, new Date().toISOString());
+      return {
+        commit: true,
+        result: data.sourceHealthSnapshots
+          .filter((snapshot) => snapshot.userId === user.id)
+          .sort((a, b) => a.source.localeCompare(b.source))
+          .map(sourceHealthView),
+      };
+    });
   }
 
   listCostGuardrails(username = "demo") {
-    const ensuredUser =
-      this.getUser(username) ?? this.seedDevelopmentUser(username);
-    const data = this.store.read();
-    const user = data.users.find((item) => item.id === ensuredUser.id);
-    if (!user) throw new Error("User disappeared during cost guardrail read");
-    this.refreshCostAnomaliesInData(data, user.id, new Date().toISOString());
-    this.store.write(data);
-    return {
-      rules: data.costGuardrailRules
-        .filter((rule) => rule.userId === user.id)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-        .map(costGuardrailRuleView),
-      anomalies: data.costAnomalies
-        .filter((anomaly) => anomaly.userId === user.id)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map(costAnomalyView),
-    };
+    return this.store.transaction((data) => {
+      const user =
+        this.userByName(data, username) ??
+        this.ensureUserInData(data, username, {
+          displayName: "Demo Developer",
+        });
+      this.refreshCostAnomaliesInData(data, user.id, new Date().toISOString());
+      return {
+        commit: true,
+        result: {
+          rules: data.costGuardrailRules
+            .filter((rule) => rule.userId === user.id)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+            .map(costGuardrailRuleView),
+          anomalies: data.costAnomalies
+            .filter((anomaly) => anomaly.userId === user.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .map(costAnomalyView),
+        },
+      };
+    });
   }
 
   upsertCostGuardrail(username: string, rawInput: CostGuardrailInput) {
     const input = costGuardrailInputSchema.parse(rawInput);
-    const ensuredUser =
-      this.getUser(username) ?? this.seedDevelopmentUser(username);
-    const data = this.store.read();
-    const user = data.users.find((item) => item.id === ensuredUser.id);
-    if (!user) throw new Error("User disappeared during cost guardrail update");
-    if (
-      input.scope === "device" &&
-      !data.devices.some(
-        (device) => device.userId === user.id && device.id === input.deviceId,
-      )
-    ) {
-      throw new CostGuardrailTargetError(
-        "Guardrail device target was not found for this user",
-      );
-    }
+    return this.store.transaction((data) => {
+      const user =
+        this.userByName(data, username) ??
+        this.ensureUserInData(data, username, {
+          displayName: "Demo Developer",
+        });
+      if (
+        input.scope === "device" &&
+        !data.devices.some(
+          (device) => device.userId === user.id && device.id === input.deviceId,
+        )
+      ) {
+        throw new CostGuardrailTargetError(
+          "Guardrail device target was not found for this user",
+        );
+      }
 
-    const now = new Date().toISOString();
-    const patch = normalizeCostGuardrailInput(input);
-    const existing =
-      data.costGuardrailRules.find(
-        (rule) => rule.userId === user.id && rule.id === input.id,
-      ) ??
-      data.costGuardrailRules.find((rule) =>
-        sameCostGuardrailTarget(rule, user.id, input),
-      );
+      const now = new Date().toISOString();
+      const patch = normalizeCostGuardrailInput(input);
+      const existing =
+        data.costGuardrailRules.find(
+          (rule) => rule.userId === user.id && rule.id === input.id,
+        ) ??
+        data.costGuardrailRules.find((rule) =>
+          sameCostGuardrailTarget(rule, user.id, input),
+        );
 
-    const rule: CostGuardrailRuleRecord = existing ?? {
-      id: input.id ?? randomUUID(),
-      userId: user.id,
-      scope: patch.scope,
-      period: patch.period,
-      limitUsd: patch.limitUsd,
-      enabled: patch.enabled,
-      createdAt: now,
-      updatedAt: now,
-    };
+      const rule: CostGuardrailRuleRecord = existing ?? {
+        id: input.id ?? randomUUID(),
+        userId: user.id,
+        scope: patch.scope,
+        period: patch.period,
+        limitUsd: patch.limitUsd,
+        enabled: patch.enabled,
+        createdAt: now,
+        updatedAt: now,
+      };
 
-    Object.assign(rule, patch, { updatedAt: now });
-    if (!existing) data.costGuardrailRules.push(rule);
+      Object.assign(rule, patch, { updatedAt: now });
+      if (!existing) data.costGuardrailRules.push(rule);
 
-    this.refreshCostAnomaliesInData(data, user.id, now);
-    this.store.write(data);
-    return {
-      rule: costGuardrailRuleView(rule),
-      anomalies: data.costAnomalies
-        .filter((anomaly) => anomaly.userId === user.id)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map(costAnomalyView),
-    };
+      this.refreshCostAnomaliesInData(data, user.id, now);
+      return {
+        commit: true,
+        result: {
+          rule: costGuardrailRuleView(rule),
+          anomalies: data.costAnomalies
+            .filter((anomaly) => anomaly.userId === user.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .map(costAnomalyView),
+        },
+      };
+    });
   }
 
   mergeIssues(username = "demo") {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    if (!user) return [];
-    this.refreshMergeIssuesInData(data, user.id, new Date().toISOString());
-    this.store.write(data);
-    return data.mergeIssues
-      .filter((issue) => issue.userId === user.id)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(mergeIssueView);
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      if (!user) return { commit: false, result: [] };
+      this.refreshMergeIssuesInData(data, user.id, new Date().toISOString());
+      return {
+        commit: true,
+        result: data.mergeIssues
+          .filter((issue) => issue.userId === user.id)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(mergeIssueView),
+      };
+    });
   }
 
   resolveMergeIssue(
@@ -984,19 +985,22 @@ export class TokSyncRepository {
     issueId: string,
     action: MergeIssueRecord["suggestedAction"],
   ) {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    const issue = user
-      ? data.mergeIssues.find(
-          (item) => item.userId === user.id && item.id === issueId,
-        )
-      : undefined;
-    if (!user || !issue) return null;
-    issue.status = action === "dismiss" ? "dismissed" : "resolved";
-    issue.resolvedAt = new Date().toISOString();
-    this.recomputeUserInData(data, user.id);
-    this.store.write(data);
-    return { status: issue.status, rollupStatus: "completed" };
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      const issue = user
+        ? data.mergeIssues.find(
+            (item) => item.userId === user.id && item.id === issueId,
+          )
+        : undefined;
+      if (!user || !issue) return { commit: false, result: null };
+      issue.status = action === "dismiss" ? "dismissed" : "resolved";
+      issue.resolvedAt = new Date().toISOString();
+      this.recomputeUserInData(data, user.id);
+      return {
+        commit: true,
+        result: { status: issue.status, rollupStatus: "completed" },
+      };
+    });
   }
 
   exportMetrics(
@@ -1101,155 +1105,155 @@ export class TokSyncRepository {
 
   createVaultExport(username = "demo", rawInput: VaultExportInput) {
     const input = vaultExportInputSchema.parse(rawInput);
-    let data = this.store.read();
-    let user = this.userByName(data, username);
-    if (!user) {
-      this.ensureUser(username);
-      data = this.store.read();
-      user = this.userByName(data, username);
-    }
-    if (!user) throw new Error("User disappeared during vault export");
-    if (input.includeContent) {
-      throw new Error("TokSync vault content export is not enabled");
-    }
+    return this.store.transaction((data) => {
+      const user =
+        this.userByName(data, username) ??
+        this.ensureUserInData(data, username);
+      if (input.includeContent) {
+        throw new Error("TokSync vault content export is not enabled");
+      }
 
-    const now = new Date().toISOString();
-    this.refreshSourceHealthInData(data, user.id, now);
-    const events = this.filterEvents(data, user.id, {});
-    const totals = sumEvents(events);
-    const devices = data.devices
-      .filter((device) => device.userId === user.id)
-      .map((device) =>
-        deviceView(
-          device,
-          events.filter((event) => event.deviceId === device.id).length,
-        ),
-      );
-    const snapshot = {
-      schemaVersion: 1 as const,
-      format: input.format,
-      exportedAt: now,
-      privacy: {
-        mode: "metrics-only" as const,
-        encrypted: true,
-        excludedFields: RECEIPT_EXCLUDED_FIELDS,
-      },
-      includes: {
-        publicCache: input.includePublicCache,
-        receipts: input.includeReceipts,
-        includeContent: false,
-      },
-      user: {
-        username: user.username,
-        displayName: user.displayName,
-        publicProfileEnabled: user.publicProfileEnabled,
-        showCost: user.showCost,
-        showSourceBreakdown: user.showSourceBreakdown,
-        showModelBreakdown: user.showModelBreakdown,
-        showWorkspaceBreakdown: user.showWorkspaceBreakdown,
-      },
-      devices,
-      metrics: {
-        events: events.map(vaultSnapshotEvent),
-        summary: {
-          totals: {
-            tokens: totals.tokens,
-            costUsd: round(totals.costUsd),
-            activeDays: new Set(events.map((event) => event.localDate)).size,
-            messageCount: totals.messages,
-            turns: events.filter((event) => event.isTurnStart).length,
-          },
-          topSources: vaultBreakdown(events, "source"),
-          topModels: vaultBreakdown(events, "modelId"),
-          topDevices: vaultBreakdown(events, "deviceId"),
-          topWorkspaces: vaultBreakdown(events, "workspaceLabel"),
-          lastSyncAt: latest(
-            data.syncRuns
-              .filter((run) => run.userId === user.id)
-              .map((run) => run.finishedAt || run.startedAt),
+      const now = new Date().toISOString();
+      this.refreshSourceHealthInData(data, user.id, now);
+      const events = this.filterEvents(data, user.id, {});
+      const totals = sumEvents(events);
+      const devices = data.devices
+        .filter((device) => device.userId === user.id)
+        .map((device) =>
+          deviceView(
+            device,
+            events.filter((event) => event.deviceId === device.id).length,
           ),
+        );
+      const snapshot = {
+        schemaVersion: 1 as const,
+        format: input.format,
+        exportedAt: now,
+        privacy: {
+          mode: "metrics-only" as const,
+          encrypted: true,
+          excludedFields: RECEIPT_EXCLUDED_FIELDS,
         },
-        usageDaily: usageDailyView(events),
-        sourceHealth: data.sourceHealthSnapshots
-          .filter((snapshot) => snapshot.userId === user.id)
-          .sort((a, b) => a.source.localeCompare(b.source))
-          .map(sourceHealthView),
-        mergeIssues: data.mergeIssues
-          .filter((issue) => issue.userId === user.id)
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-          .map(mergeIssueView),
-        costGuardrails: {
-          rules: data.costGuardrailRules
-            .filter((rule) => rule.userId === user.id)
-            .map(costGuardrailRuleView),
-          anomalies: data.costAnomalies
-            .filter((anomaly) => anomaly.userId === user.id)
-            .map(costAnomalyView),
+        includes: {
+          publicCache: input.includePublicCache,
+          receipts: input.includeReceipts,
+          includeContent: false,
         },
-      },
-      ...(input.includeReceipts
-        ? {
-            receipts: data.syncReceipts
-              .filter((receipt) => receipt.userId === user.id)
-              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-              .map(syncReceiptView),
-          }
-        : {}),
-      ...(input.includePublicCache
-        ? {
-            publicProfile: {
-              enabled: user.publicProfileEnabled,
-              stats: vaultPublicProfileStats(
-                data.publicProfileStats.find(
-                  (stats) => stats.userId === user.id,
-                ) ?? null,
-              ),
+        user: {
+          username: user.username,
+          displayName: user.displayName,
+          publicProfileEnabled: user.publicProfileEnabled,
+          showCost: user.showCost,
+          showSourceBreakdown: user.showSourceBreakdown,
+          showModelBreakdown: user.showModelBreakdown,
+          showWorkspaceBreakdown: user.showWorkspaceBreakdown,
+        },
+        devices,
+        metrics: {
+          events: events.map(vaultSnapshotEvent),
+          summary: {
+            totals: {
+              tokens: totals.tokens,
+              costUsd: round(totals.costUsd),
+              activeDays: new Set(events.map((event) => event.localDate)).size,
+              messageCount: totals.messages,
+              turns: events.filter((event) => event.isTurnStart).length,
             },
-          }
-        : {}),
-    };
+            topSources: vaultBreakdown(events, "source"),
+            topModels: vaultBreakdown(events, "modelId"),
+            topDevices: vaultBreakdown(events, "deviceId"),
+            topWorkspaces: vaultBreakdown(events, "workspaceLabel"),
+            lastSyncAt: latest(
+              data.syncRuns
+                .filter((run) => run.userId === user.id)
+                .map((run) => run.finishedAt || run.startedAt),
+            ),
+          },
+          usageDaily: usageDailyView(events),
+          sourceHealth: data.sourceHealthSnapshots
+            .filter((snapshot) => snapshot.userId === user.id)
+            .sort((a, b) => a.source.localeCompare(b.source))
+            .map(sourceHealthView),
+          mergeIssues: data.mergeIssues
+            .filter((issue) => issue.userId === user.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .map(mergeIssueView),
+          costGuardrails: {
+            rules: data.costGuardrailRules
+              .filter((rule) => rule.userId === user.id)
+              .map(costGuardrailRuleView),
+            anomalies: data.costAnomalies
+              .filter((anomaly) => anomaly.userId === user.id)
+              .map(costAnomalyView),
+          },
+        },
+        ...(input.includeReceipts
+          ? {
+              receipts: data.syncReceipts
+                .filter((receipt) => receipt.userId === user.id)
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                .map(syncReceiptView),
+            }
+          : {}),
+        ...(input.includePublicCache
+          ? {
+              publicProfile: {
+                enabled: user.publicProfileEnabled,
+                stats: vaultPublicProfileStats(
+                  data.publicProfileStats.find(
+                    (stats) => stats.userId === user.id,
+                  ) ?? null,
+                ),
+              },
+            }
+          : {}),
+      };
 
-    assertMetricsOnlyPayload(snapshot);
-    const payload = encryptVaultPayload(
-      snapshot,
-      input.recoveryPassphrase,
-      now,
-    );
-    const receiptCount = input.includeReceipts
-      ? data.syncReceipts.filter((receipt) => receipt.userId === user.id).length
-      : 0;
-    const exportId = randomUUID();
-    const artifactLocation = this.storeVaultArtifact(
-      user.id,
-      exportId,
-      payload,
-    );
-    const record: VaultExportRecord = {
-      id: exportId,
-      userId: user.id,
-      kind: "export",
-      status: "completed",
-      format: input.format,
-      includePublicCache: input.includePublicCache,
-      includeReceipts: input.includeReceipts,
-      includeContent: false,
-      artifactDigest: payload.payloadDigest,
-      artifactByteSize: Buffer.byteLength(JSON.stringify(payload)),
-      ...artifactLocation,
-      eventCount: events.length,
-      deviceCount: devices.length,
-      sourceCount: new Set(events.map((event) => event.source)).size,
-      receiptCount,
-      createdAt: now,
-      finishedAt: now,
-    };
-    data.vaultExports.push(record);
-    this.store.write(data);
-    return {
-      export: vaultExportView(record),
-      payload,
-      payloadDigest: payload.payloadDigest,
-    };
+      assertMetricsOnlyPayload(snapshot);
+      const payload = encryptVaultPayload(
+        snapshot,
+        input.recoveryPassphrase,
+        now,
+      );
+      const receiptCount = input.includeReceipts
+        ? data.syncReceipts.filter((receipt) => receipt.userId === user.id)
+            .length
+        : 0;
+      const exportId = randomUUID();
+      const artifactLocation = this.storeVaultArtifact(
+        user.id,
+        exportId,
+        payload,
+      );
+      const record: VaultExportRecord = {
+        id: exportId,
+        userId: user.id,
+        kind: "export",
+        status: "completed",
+        format: input.format,
+        includePublicCache: input.includePublicCache,
+        includeReceipts: input.includeReceipts,
+        includeContent: false,
+        artifactDigest: payload.payloadDigest,
+        artifactByteSize: Buffer.byteLength(JSON.stringify(payload)),
+        ...artifactLocation,
+        eventCount: events.length,
+        deviceCount: devices.length,
+        sourceCount: new Set(events.map((event) => event.source)).size,
+        receiptCount,
+        createdAt: now,
+        finishedAt: now,
+      };
+      data.vaultExports.push(record);
+      return {
+        commit: true,
+        result: {
+          export: vaultExportView(record),
+          payload,
+          payloadDigest: payload.payloadDigest,
+        },
+      };
+    });
   }
 
   previewVaultImport(
@@ -1296,133 +1300,131 @@ export class TokSyncRepository {
   ) {
     const parsed = parseVaultPayload(rawPayload, recoveryPassphrase);
     if (!parsed.ok) return parsed;
-    const ensured = this.ensureUser(username);
-    const data = this.store.read();
-    const user = data.users.find((item) => item.id === ensured.id);
-    if (!user)
-      return {
-        ok: false as const,
-        response: apiError("not_found", "User not found"),
-        status: 404,
+    return this.store.transaction((data) => {
+      const user = this.ensureUserInData(data, username);
+      const now = new Date().toISOString();
+      const indexes = buildUsageEventIndexes(data, user.id);
+      let inserted = 0;
+      let skipped = 0;
+      const sourceSummary: Record<string, number> = {};
+      ensureVaultImportDevices(
+        data,
+        user.id,
+        parsed.extracted.devices,
+        parsed.extracted.events,
+        now,
+        (value) => this.hashDeviceFingerprint(value),
+      );
+      const syncRun: SyncRunRecord = {
+        id: randomUUID(),
+        clientRunId: `vault-import-${randomUUID()}`,
+        userId: user.id,
+        deviceId: parsed.extracted.events[0]?.deviceId ?? "vault-import",
+        mode: "sync",
+        status: "completed",
+        sourceSummary,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        errorCount: 0,
+        startedAt: now,
+        finishedAt: now,
       };
+      data.syncRuns.push(syncRun);
 
-    const now = new Date().toISOString();
-    const indexes = buildUsageEventIndexes(data, user.id);
-    let inserted = 0;
-    let skipped = 0;
-    const sourceSummary: Record<string, number> = {};
-    ensureVaultImportDevices(
-      data,
-      user.id,
-      parsed.extracted.devices,
-      parsed.extracted.events,
-      now,
-      (value) => this.hashDeviceFingerprint(value),
-    );
-    const syncRun: SyncRunRecord = {
-      id: randomUUID(),
-      clientRunId: `vault-import-${randomUUID()}`,
-      userId: user.id,
-      deviceId: parsed.extracted.events[0]?.deviceId ?? "vault-import",
-      mode: "sync",
-      status: "completed",
-      sourceSummary,
-      insertedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      errorCount: 0,
-      startedAt: now,
-      finishedAt: now,
-    };
-    data.syncRuns.push(syncRun);
-
-    for (const event of parsed.extracted.events) {
-      sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
-      if (findExistingUsageEvent(indexes, user.id, event)) {
-        skipped += 1;
-        continue;
+      for (const event of parsed.extracted.events) {
+        sourceSummary[event.source] = (sourceSummary[event.source] ?? 0) + 1;
+        if (findExistingUsageEvent(indexes, user.id, event)) {
+          skipped += 1;
+          continue;
+        }
+        const stored: StoredUsageEvent = {
+          ...event,
+          id: randomUUID(),
+          userId: user.id,
+          syncRunId: syncRun.id,
+          createdAt: now,
+          updatedAt: now,
+        };
+        data.usageEvents.push(stored);
+        indexUsageEvent(indexes, stored);
+        inserted += 1;
       }
-      const stored: StoredUsageEvent = {
-        ...event,
+
+      syncRun.insertedCount = inserted;
+      syncRun.skippedCount = skipped;
+      syncRun.sourceSummary = sourceSummary;
+      data.vaultExports.push({
         id: randomUUID(),
         userId: user.id,
-        syncRunId: syncRun.id,
-        createdAt: now,
-        updatedAt: now,
-      };
-      data.usageEvents.push(stored);
-      indexUsageEvent(indexes, stored);
-      inserted += 1;
-    }
-
-    syncRun.insertedCount = inserted;
-    syncRun.skippedCount = skipped;
-    syncRun.sourceSummary = sourceSummary;
-    data.vaultExports.push({
-      id: randomUUID(),
-      userId: user.id,
-      kind: "import",
-      status: "completed",
-      format: parsed.payload.format,
-      includePublicCache: parsed.payload.includes.publicCache,
-      includeReceipts: parsed.payload.includes.receipts,
-      includeContent: false,
-      artifactDigest: parsed.payload.payloadDigest,
-      artifactByteSize: Buffer.byteLength(JSON.stringify(parsed.payload)),
-      eventCount: parsed.extracted.events.length,
-      deviceCount: parsed.extracted.devices.length,
-      sourceCount: Object.keys(sourceSummary).length,
-      receiptCount: parsed.extracted.receiptCount,
-      createdAt: now,
-      finishedAt: now,
-    });
-    this.recomputeUserInData(data, user.id);
-    this.refreshSourceHealthInData(data, user.id, now);
-    this.refreshMergeIssuesInData(data, user.id, now);
-    this.store.write(data);
-
-    const previewEvents = parsed.extracted.events.map(previewStoredEvent);
-    const totals = sumEvents(previewEvents);
-    return {
-      ok: true as const,
-      response: {
+        kind: "import",
+        status: "completed",
         format: parsed.payload.format,
-        createdAt: parsed.payload.createdAt,
-        payloadDigest: parsed.payload.payloadDigest,
+        includePublicCache: parsed.payload.includes.publicCache,
+        includeReceipts: parsed.payload.includes.receipts,
+        includeContent: false,
+        artifactDigest: parsed.payload.payloadDigest,
+        artifactByteSize: Buffer.byteLength(JSON.stringify(parsed.payload)),
         eventCount: parsed.extracted.events.length,
-        importedEvents: inserted,
-        duplicateEvents: skipped,
         deviceCount: parsed.extracted.devices.length,
+        sourceCount: Object.keys(sourceSummary).length,
         receiptCount: parsed.extracted.receiptCount,
-        sourceSummary,
-        totals: {
-          tokens: totals.tokens,
-          costUsd: round(totals.costUsd),
-          messageCount: totals.messages,
+        createdAt: now,
+        finishedAt: now,
+      });
+      this.recomputeUserInData(data, user.id);
+      this.refreshSourceHealthInData(data, user.id, now);
+      this.refreshMergeIssuesInData(data, user.id, now);
+
+      const previewEvents = parsed.extracted.events.map(previewStoredEvent);
+      const totals = sumEvents(previewEvents);
+      return {
+        commit: true,
+        result: {
+          ok: true as const,
+          response: {
+            format: parsed.payload.format,
+            createdAt: parsed.payload.createdAt,
+            payloadDigest: parsed.payload.payloadDigest,
+            eventCount: parsed.extracted.events.length,
+            importedEvents: inserted,
+            duplicateEvents: skipped,
+            deviceCount: parsed.extracted.devices.length,
+            receiptCount: parsed.extracted.receiptCount,
+            sourceSummary,
+            totals: {
+              tokens: totals.tokens,
+              costUsd: round(totals.costUsd),
+              messageCount: totals.messages,
+            },
+          },
+          status: 200,
         },
-      },
-      status: 200,
-    };
+      };
+    });
   }
 
   deleteSubmittedData(username = "demo") {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    if (!user) return null;
-    user.publicProfileEnabled = false;
-    user.showCost = false;
-    user.showSourceBreakdown = false;
-    user.showModelBreakdown = false;
-    user.updatedAt = new Date().toISOString();
-    data.publicProfileStats = data.publicProfileStats.filter(
-      (stats) => stats.userId !== user.id,
-    );
-    this.store.write(data);
-    return {
-      deleted: true,
-      publicProfileEnabled: false,
-      leaderboardOptIn: false,
-    };
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      if (!user) return { commit: false, result: null };
+      user.publicProfileEnabled = false;
+      user.showCost = false;
+      user.showSourceBreakdown = false;
+      user.showModelBreakdown = false;
+      user.updatedAt = new Date().toISOString();
+      data.publicProfileStats = data.publicProfileStats.filter(
+        (stats) => stats.userId !== user.id,
+      );
+      return {
+        commit: true,
+        result: {
+          deleted: true,
+          publicProfileEnabled: false,
+          leaderboardOptIn: false,
+        },
+      };
+    });
   }
 
   previewLocalPayload(rawPayload: unknown) {
@@ -1482,64 +1484,67 @@ export class TokSyncRepository {
   }
 
   revokeDevice(username: string, deviceId: string) {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    const device = user
-      ? data.devices.find(
-          (item) => item.userId === user.id && item.id === deviceId,
-        )
-      : undefined;
-    if (!user || !device) return null;
-    const now = new Date().toISOString();
-    device.revokedAt = now;
-    for (const token of data.deviceTokens.filter(
-      (item) => item.deviceId === device.id,
-    )) {
-      token.revokedAt = now;
-    }
-    this.store.write(data);
-    return { status: "revoked" };
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      const device = user
+        ? data.devices.find(
+            (item) => item.userId === user.id && item.id === deviceId,
+          )
+        : undefined;
+      if (!user || !device) return { commit: false, result: null };
+      const now = new Date().toISOString();
+      device.revokedAt = now;
+      for (const token of data.deviceTokens.filter(
+        (item) => item.deviceId === device.id,
+      )) {
+        token.revokedAt = now;
+      }
+      return { commit: true, result: { status: "revoked" } };
+    });
   }
 
   deleteDeviceData(username: string, deviceId: string) {
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    const device = user
-      ? data.devices.find(
-          (item) => item.userId === user.id && item.id === deviceId,
-        )
-      : undefined;
-    if (!user || !device) return null;
-    data.usageEvents = data.usageEvents.filter(
-      (event) => event.deviceId !== device.id,
-    );
-    device.dataClearedAt = new Date().toISOString();
-    this.recomputeUserInData(data, user.id);
-    this.store.write(data);
-    return { status: "completed", jobId: randomUUID() };
+    return this.store.transaction((data) => {
+      const user = this.userByName(data, username);
+      const device = user
+        ? data.devices.find(
+            (item) => item.userId === user.id && item.id === deviceId,
+          )
+        : undefined;
+      if (!user || !device) return { commit: false, result: null };
+      data.usageEvents = data.usageEvents.filter(
+        (event) => event.deviceId !== device.id,
+      );
+      device.dataClearedAt = new Date().toISOString();
+      this.recomputeUserInData(data, user.id);
+      return {
+        commit: true,
+        result: { status: "completed", jobId: randomUUID() },
+      };
+    });
   }
 
   setPublicProfile(username: string, rawInput: PublicProfileInput) {
     const input = publicProfileInputSchema.parse(rawInput);
-    const data = this.store.read();
-    const user = this.ensureUser(username);
-    const current = data.users.find((item) => item.id === user.id);
-    if (!current)
-      throw new Error("User disappeared during public profile update");
-    Object.assign(current, {
-      publicProfileEnabled: input.enabled,
-      showCost: input.showCost,
-      showSourceBreakdown: input.showSourceBreakdown,
-      showModelBreakdown: input.showModelBreakdown,
-      showWorkspaceBreakdown: input.showWorkspaceBreakdown,
-      updatedAt: new Date().toISOString(),
+    return this.store.transaction((data) => {
+      const user = this.ensureUserInData(data, username);
+      Object.assign(user, {
+        publicProfileEnabled: input.enabled,
+        showCost: input.showCost,
+        showSourceBreakdown: input.showSourceBreakdown,
+        showModelBreakdown: input.showModelBreakdown,
+        showWorkspaceBreakdown: input.showWorkspaceBreakdown,
+        updatedAt: new Date().toISOString(),
+      });
+      this.recomputeUserInData(data, user.id);
+      return {
+        commit: true,
+        result: {
+          enabled: user.publicProfileEnabled,
+          url: `${process.env.APP_URL || "http://localhost:3000"}/u/${user.username}`,
+        },
+      };
     });
-    this.recomputeUserInData(data, current.id);
-    this.store.write(data);
-    return {
-      enabled: current.publicProfileEnabled,
-      url: `${process.env.APP_URL || "http://localhost:3000"}/u/${current.username}`,
-    };
   }
 
   getPublicStats(username: string) {
@@ -1647,57 +1652,71 @@ export class TokSyncRepository {
     };
   }
 
-  setLeaderboardOptIn(username: string, rawInput: LeaderboardOptInInput) {
+  setLeaderboardOptIn(
+    username: string,
+    rawInput: LeaderboardOptInInput,
+  ): LeaderboardOptInResult {
     const input = leaderboardOptInInputSchema.parse(rawInput);
-    const data = this.store.read();
-    const user = this.userByName(data, username);
-    if (!user) return null;
-    const now = new Date().toISOString();
+    return this.store.transaction<LeaderboardOptInResult>((data) => {
+      const user = this.userByName(data, username);
+      if (!user) return { commit: false, result: null };
+      const now = new Date().toISOString();
 
-    if (!user.publicProfileEnabled) {
-      data.publicProfileStats = data.publicProfileStats.filter(
-        (stats) => stats.userId !== user.id,
-      );
-      this.store.write(data);
-      if (input.enabled) {
+      if (!user.publicProfileEnabled) {
+        data.publicProfileStats = data.publicProfileStats.filter(
+          (stats) => stats.userId !== user.id,
+        );
+        if (input.enabled) {
+          return {
+            commit: true,
+            result: {
+              ok: false as const,
+              code: "public_profile_required",
+              message: "Enable public profile before joining the leaderboard",
+            },
+          };
+        }
         return {
-          ok: false as const,
-          code: "public_profile_required",
-          message: "Enable public profile before joining the leaderboard",
+          commit: true,
+          result: {
+            ok: true as const,
+            enabled: false,
+            nextSnapshotAt: nextLeaderboardSnapshotAt(now),
+          },
         };
       }
-      return {
-        ok: true as const,
-        enabled: false,
-        nextSnapshotAt: nextLeaderboardSnapshotAt(now),
-      };
-    }
 
-    let publicStats = data.publicProfileStats.find(
-      (stats) => stats.userId === user.id,
-    );
-    if (!publicStats) {
-      this.recomputeUserInData(data, user.id);
-      publicStats = data.publicProfileStats.find(
+      let publicStats = data.publicProfileStats.find(
         (stats) => stats.userId === user.id,
       );
-    }
-    if (!publicStats) {
-      return {
-        ok: false as const,
-        code: "public_profile_required",
-        message: "Enable public profile before joining the leaderboard",
-      };
-    }
+      if (!publicStats) {
+        this.recomputeUserInData(data, user.id);
+        publicStats = data.publicProfileStats.find(
+          (stats) => stats.userId === user.id,
+        );
+      }
+      if (!publicStats) {
+        return {
+          commit: false,
+          result: {
+            ok: false as const,
+            code: "public_profile_required",
+            message: "Enable public profile before joining the leaderboard",
+          },
+        };
+      }
 
-    publicStats.leaderboardOptIn = input.enabled;
-    publicStats.updatedAt = now;
-    this.store.write(data);
-    return {
-      ok: true as const,
-      enabled: publicStats.leaderboardOptIn,
-      nextSnapshotAt: nextLeaderboardSnapshotAt(now),
-    };
+      publicStats.leaderboardOptIn = input.enabled;
+      publicStats.updatedAt = now;
+      return {
+        commit: true,
+        result: {
+          ok: true as const,
+          enabled: publicStats.leaderboardOptIn,
+          nextSnapshotAt: nextLeaderboardSnapshotAt(now),
+        },
+      };
+    });
   }
 
   listLeaderboard(query: LeaderboardQuery = {}) {
@@ -1729,9 +1748,10 @@ export class TokSyncRepository {
   }
 
   private recomputeUser(userId: string) {
-    const data = this.store.read();
-    this.recomputeUserInData(data, userId);
-    this.store.write(data);
+    this.store.transaction((data) => {
+      this.recomputeUserInData(data, userId);
+      return { commit: true, result: null };
+    });
   }
 
   private recomputeUserInData(data: TokSyncData, userId: string) {
@@ -1818,6 +1838,38 @@ export class TokSyncRepository {
   private userByName(data: TokSyncData, username: string) {
     const lower = normalizeUsername(username);
     return data.users.find((user) => user.usernameLower === lower);
+  }
+
+  private ensureUserInData(
+    data: TokSyncData,
+    username: string,
+    patch: Partial<UserRecord> = {},
+  ) {
+    const lower = normalizeUsername(username);
+    if (!isValidUsername(username)) {
+      throw new Error(`Invalid username: ${username}`);
+    }
+    let user = data.users.find((item) => item.usernameLower === lower);
+    const now = new Date().toISOString();
+    if (!user) {
+      user = {
+        id: randomUUID(),
+        username,
+        usernameLower: lower,
+        publicProfileEnabled: false,
+        showCost: false,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+        showWorkspaceBreakdown: false,
+        createdAt: now,
+        updatedAt: now,
+        ...patch,
+      };
+      data.users.push(user);
+    } else {
+      Object.assign(user, patch, { updatedAt: now });
+    }
+    return user;
   }
 
   private filterEvents(
@@ -2589,263 +2641,6 @@ function metricsExportRow(event: StoredUsageEvent) {
   };
 }
 
-function vaultSnapshotEvent(event: StoredUsageEvent): UsageEventV1 {
-  return {
-    schemaVersion: event.schemaVersion,
-    source: event.source,
-    sourceSessionId: event.sourceSessionId,
-    sourceMessageId: event.sourceMessageId,
-    dedupKey: event.dedupKey,
-    deviceId: event.deviceId,
-    workspaceKeyHash: event.workspaceKeyHash,
-    workspaceLabel: event.workspaceLabel,
-    agent: event.agent,
-    modelId: event.modelId,
-    providerId: event.providerId,
-    timestampMs: event.timestampMs,
-    localDate: event.localDate,
-    tokens: event.tokens,
-    costUsd: event.costUsd,
-    messageCount: event.messageCount,
-    isTurnStart: event.isTurnStart,
-  };
-}
-
-function encryptVaultPayload(
-  snapshot: unknown,
-  recoveryPassphrase: string,
-  createdAt: string,
-): VaultEncryptedPayload {
-  const plainText = JSON.stringify(snapshot);
-  const iv = randomBytes(12);
-  const salt = randomBytes(16);
-  const key = deriveVaultKey(recoveryPassphrase, salt, VAULT_SCRYPT_PARAMS);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(plainText, "utf8"),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-  return {
-    format: "toksync-vault-v1",
-    schemaVersion: 1,
-    createdAt,
-    payloadDigest: `sha256:${sha256Base64Url(ciphertext)}`,
-    includes:
-      isRecord(snapshot) && isRecord(snapshot.includes)
-        ? {
-            publicCache: Boolean(snapshot.includes.publicCache),
-            receipts: Boolean(snapshot.includes.receipts),
-            includeContent: Boolean(snapshot.includes.includeContent),
-          }
-        : {
-            publicCache: true,
-            receipts: true,
-            includeContent: false,
-          },
-    keyDerivation: {
-      algorithm: "scrypt",
-      salt: salt.toString("base64url"),
-      keyLength: 32,
-      params: VAULT_SCRYPT_PARAMS,
-    },
-    encryption: {
-      algorithm: "aes-256-gcm",
-      iv: iv.toString("base64url"),
-      authTag: authTag.toString("base64url"),
-      ciphertext: ciphertext.toString("base64url"),
-    },
-  };
-}
-
-function decryptVaultPayload(
-  payload: VaultEncryptedPayload,
-  recoveryPassphrase: string,
-) {
-  const ciphertext = Buffer.from(payload.encryption.ciphertext, "base64url");
-  const expectedDigest = `sha256:${sha256Base64Url(ciphertext)}`;
-  if (payload.payloadDigest !== expectedDigest) {
-    throw new Error("Vault payload digest mismatch");
-  }
-  const iv = Buffer.from(payload.encryption.iv, "base64url");
-  const authTag = Buffer.from(payload.encryption.authTag, "base64url");
-  const salt = Buffer.from(payload.keyDerivation.salt, "base64url");
-  const key = deriveVaultKey(
-    recoveryPassphrase,
-    salt,
-    payload.keyDerivation.params,
-  );
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-  const plainText = Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final(),
-  ]).toString("utf8");
-  return JSON.parse(plainText) as unknown;
-}
-
-function deriveVaultKey(
-  recoveryPassphrase: string,
-  salt: Buffer,
-  params?: VaultScryptParams,
-) {
-  if (!params) return scryptSync(recoveryPassphrase, salt, 32);
-  return scryptSync(recoveryPassphrase, salt, 32, {
-    N: params.N,
-    r: params.r,
-    p: params.p,
-    maxmem: 128 * params.N * params.r * 2,
-  });
-}
-
-function parseVaultPayload(rawPayload: unknown, recoveryPassphrase: string) {
-  const parsedPayload = vaultEncryptedPayloadSchema.safeParse(rawPayload);
-  if (!parsedPayload.success) {
-    return {
-      ok: false as const,
-      response: apiError(
-        "invalid_payload",
-        "Vault payload failed validation",
-        parsedPayload.error.issues,
-      ),
-      status: 400,
-    };
-  }
-  if (parsedPayload.data.includes.includeContent) {
-    return {
-      ok: false as const,
-      response: apiError(
-        "feature_not_enabled",
-        "Content vault payloads are not supported",
-      ),
-      status: 400,
-    };
-  }
-
-  let snapshot: unknown;
-  try {
-    snapshot = decryptVaultPayload(parsedPayload.data, recoveryPassphrase);
-  } catch (error) {
-    return {
-      ok: false as const,
-      response: apiError(
-        "invalid_payload",
-        error instanceof Error
-          ? error.message
-          : "Vault payload could not be decrypted",
-      ),
-      status: 400,
-    };
-  }
-  try {
-    assertMetricsOnlyPayload(snapshot);
-  } catch (error) {
-    return {
-      ok: false as const,
-      response: apiError(
-        "privacy_violation",
-        error instanceof Error
-          ? error.message
-          : "Vault payload contains forbidden content fields",
-      ),
-      status: 400,
-    };
-  }
-
-  const extracted = extractVaultEvents(snapshot);
-  if (!extracted.ok) {
-    return {
-      ok: false as const,
-      response: apiError("invalid_payload", extracted.message),
-      status: 400,
-    };
-  }
-  return {
-    ok: true as const,
-    payload: parsedPayload.data,
-    snapshot,
-    extracted,
-  };
-}
-
-interface VaultSnapshotDevice {
-  id: string;
-  name?: string;
-  platform?: "windows" | "macos" | "linux";
-  agentVersion?: string;
-}
-
-function extractVaultEvents(snapshot: unknown) {
-  if (!isRecord(snapshot)) {
-    return { ok: false as const, message: "Vault snapshot must be an object" };
-  }
-  if (snapshot.format !== "toksync-vault-v1" || snapshot.schemaVersion !== 1) {
-    return {
-      ok: false as const,
-      message: "Vault schema version is not supported",
-    };
-  }
-  const metrics = isRecord(snapshot.metrics) ? snapshot.metrics : null;
-  const events = Array.isArray(metrics?.events) ? metrics.events : null;
-  if (!events) {
-    return {
-      ok: false as const,
-      message: "Vault snapshot is missing metrics.events",
-    };
-  }
-  const parsedEvents = events
-    .map((event) => usageEventV1Schema.safeParse(event))
-    .filter((result) => result.success)
-    .map((result) => result.data);
-  if (parsedEvents.length !== events.length) {
-    return {
-      ok: false as const,
-      message: "Vault snapshot contains invalid metrics events",
-    };
-  }
-  const devices = Array.isArray(snapshot.devices)
-    ? snapshot.devices
-        .map(vaultSnapshotDevice)
-        .filter((device): device is VaultSnapshotDevice => Boolean(device))
-    : [];
-  return {
-    ok: true as const,
-    events: parsedEvents,
-    devices,
-    receiptCount: Array.isArray(snapshot.receipts)
-      ? snapshot.receipts.length
-      : 0,
-  };
-}
-
-function vaultSnapshotDevice(value: unknown): VaultSnapshotDevice | null {
-  if (!isRecord(value) || typeof value.id !== "string") return null;
-  const device: VaultSnapshotDevice = { id: value.id };
-  if (typeof value.name === "string") device.name = value.name;
-  if (
-    value.platform === "windows" ||
-    value.platform === "macos" ||
-    value.platform === "linux"
-  ) {
-    device.platform = value.platform;
-  }
-  if (typeof value.agentVersion === "string") {
-    device.agentVersion = value.agentVersion;
-  }
-  return device;
-}
-
-function previewStoredEvent(event: UsageEventV1): StoredUsageEvent {
-  return {
-    ...event,
-    id: "preview",
-    userId: "preview",
-    syncRunId: "preview",
-    createdAt: "preview",
-    updatedAt: "preview",
-  };
-}
-
 function countVaultDuplicateEvents(
   data: TokSyncData,
   userId: string,
@@ -2855,43 +2650,6 @@ function countVaultDuplicateEvents(
   return events.filter((event) =>
     Boolean(findExistingUsageEvent(indexes, userId, event)),
   ).length;
-}
-
-function ensureVaultImportDevices(
-  data: TokSyncData,
-  userId: string,
-  snapshotDevices: VaultSnapshotDevice[],
-  events: UsageEventV1[],
-  now: string,
-  hashDeviceFingerprint: (value: string) => string,
-) {
-  const devicesById = new Map(
-    snapshotDevices.map((device) => [device.id, device]),
-  );
-  for (const deviceId of new Set(events.map((event) => event.deviceId))) {
-    const existing = data.devices.find(
-      (device) => device.userId === userId && device.id === deviceId,
-    );
-    if (existing) {
-      existing.lastSeenAt = now;
-      existing.updatedAt = now;
-      continue;
-    }
-    const snapshotDevice = devicesById.get(deviceId);
-    data.devices.push({
-      id: deviceId,
-      userId,
-      deviceFingerprintHash: hashDeviceFingerprint(
-        `vault-import:${userId}:${deviceId}`,
-      ),
-      name: snapshotDevice?.name ?? "Imported vault device",
-      platform: snapshotDevice?.platform ?? "linux",
-      agentVersion: snapshotDevice?.agentVersion ?? "vault-import",
-      lastSeenAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
 }
 
 function toCsv(rows: Array<ReturnType<typeof metricsExportRow>>) {
@@ -3058,25 +2816,6 @@ function mergeIssueView(issue: MergeIssueRecord) {
   };
 }
 
-function vaultExportView(record: VaultExportRecord) {
-  return {
-    id: record.id,
-    kind: record.kind,
-    status: record.status,
-    format: record.format,
-    includePublicCache: record.includePublicCache,
-    includeReceipts: record.includeReceipts,
-    includeContent: record.includeContent,
-    payloadDigest: record.artifactDigest,
-    artifactByteSize: record.artifactByteSize,
-    eventCount: record.eventCount,
-    deviceCount: record.deviceCount,
-    error: record.error,
-    createdAt: record.createdAt,
-    finishedAt: record.finishedAt,
-  };
-}
-
 function buildProfileStats(
   userId: string,
   events: StoredUsageEvent[],
@@ -3202,31 +2941,6 @@ function vaultBreakdown(
   }));
 }
 
-function vaultPublicProfileStats(stats: PublicProfileStatsRecord | null) {
-  if (!stats) return null;
-  return {
-    usernameLower: stats.usernameLower,
-    displayName: stats.displayName,
-    avatarUrl: stats.avatarUrl,
-    totalTokens: stats.totalTokens,
-    totalCostUsd: stats.totalCostUsd,
-    activeDays: stats.activeDays,
-    topSources: stats.topSources.map(vaultBreakdownRow),
-    topModels: stats.topModels.map(vaultBreakdownRow),
-    topWorkspaces: stats.topWorkspaces.map(vaultBreakdownRow),
-    dateStart: stats.dateStart,
-    dateEnd: stats.dateEnd,
-    lastSyncAt: stats.lastSyncAt,
-    updatedAt: stats.updatedAt,
-    showCost: stats.showCost,
-    showSourceBreakdown: stats.showSourceBreakdown,
-    showModelBreakdown: stats.showModelBreakdown,
-    showWorkspaceBreakdown: stats.showWorkspaceBreakdown,
-    dailyPublic: stats.dailyPublic,
-    leaderboardOptIn: stats.leaderboardOptIn,
-  };
-}
-
 function publicFieldsForStats(stats: PublicProfileStatsRecord) {
   return [
     "username",
@@ -3284,15 +2998,6 @@ function publicBreakdown(rows: BreakdownRow[], showCost: boolean) {
     messages: row.messages,
     ...(showCost ? { costUsd: row.costUsd } : {}),
   }));
-}
-
-function vaultBreakdownRow(row: BreakdownRow) {
-  return {
-    key: row.key,
-    tokens: row.tokens,
-    costUsd: row.costUsd,
-    messageCount: row.messages,
-  };
 }
 
 function publicWorkspaceBreakdown(events: StoredUsageEvent[]): BreakdownRow[] {

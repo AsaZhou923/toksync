@@ -42,7 +42,7 @@ assertUnder("10MB JSONL parse", parseMs, 3_000);
 const repo = new TokSyncRepository(
   new FileTokSyncStore(path.join(tmpdir(), `toksync-perf-${Date.now()}.json`)),
 );
-const api = createApiApp({ repo });
+const api = createApiApp({ repo, devAuth: true });
 const auth = await connectDevice();
 const events = Array.from({ length: 10_000 }, (_, index) =>
   perfEvent(auth.deviceId, index),

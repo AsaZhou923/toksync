@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
 import { cors } from "hono/cors";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   renderBadgeSvg,
   renderProfileCardSvg,
@@ -30,9 +31,9 @@ import {
   normalizeUsername,
   publicProfileInputSchema,
   userApiTokenInputSchema,
-  vaultExportInputSchema,
-  vaultImportPreviewInputSchema,
 } from "@toksync/shared";
+import { rateLimit } from "./rate-limit";
+import { registerVaultRoutes } from "./routes/vault";
 
 export interface ApiAppOptions {
   repo?: TokSyncRepository;
@@ -78,6 +79,25 @@ interface GitHubEmailResponse {
   verified?: boolean;
 }
 
+const AUTH_REQUIRED_ROUTES = [
+  "/v1/auth/session",
+  "/v1/dashboard/*",
+  "/v1/sync-runs",
+  "/v1/sync/receipts",
+  "/v1/sync/receipts/*",
+  "/v1/source-health",
+  "/v1/cost-guardrails",
+  "/v1/merge/*",
+  "/v1/exports",
+  "/v1/vault/*",
+  "/v1/devices",
+  "/v1/devices/*",
+  "/v1/settings/*",
+  "/v1/public-profile",
+  "/v1/leaderboard/opt-in",
+  "/v1/wrapped",
+];
+
 export function createApiApp(options: ApiAppOptions = {}) {
   const app = new Hono();
   const repo = options.repo ?? new TokSyncRepository();
@@ -85,6 +105,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   const sessionSecret = resolveSessionSecret(options.sessionSecret);
   const githubOAuth = resolveGitHubOAuth(options.githubOAuth);
   const logger = options.logger ?? defaultApiLogger;
+  const requireAuth = authMiddleware(devAuth, sessionSecret);
 
   app.use("*", requestContext(logger));
 
@@ -99,6 +120,16 @@ export function createApiApp(options: ApiAppOptions = {}) {
   );
   app.use("*", requestBodyLimit());
   app.use("*", rateLimit());
+  for (const route of AUTH_REQUIRED_ROUTES) {
+    app.use(route, requireAuth);
+  }
+
+  app.onError((error, c) => {
+    if (process.env.NODE_ENV !== "test") {
+      console.error(error);
+    }
+    return c.json(apiError("internal_error", "Internal server error"), 500);
+  });
 
   app.get("/health", (c) =>
     c.json({ status: "ok", service: "api", timestamp: Date.now() }),
@@ -179,9 +210,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/auth/session", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json(repo.authSession(username));
   });
 
@@ -251,7 +280,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
       bearerToken(c.req.raw) ?? undefined,
       body,
     );
-    return jsonResponse(result.response, result.status);
+    return c.json(result.response, result.status as ContentfulStatusCode);
   });
 
   app.post("/v1/sync/content-batch", (c) =>
@@ -262,27 +291,21 @@ export function createApiApp(options: ApiAppOptions = {}) {
   );
 
   app.get("/v1/dashboard/summary", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const summary = repo.dashboardSummary(username, filtersFromUrl(c.req.url));
     if (!summary) return c.json(apiError("not_found", "User not found"), 404);
     return c.json(summary);
   });
 
   app.get("/v1/dashboard/usage-daily", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const days = repo.usageDaily(username, filtersFromUrl(c.req.url));
     if (!days) return c.json(apiError("not_found", "User not found"), 404);
     return c.json(days);
   });
 
   app.get("/v1/dashboard/breakdowns", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const summary = repo.dashboardSummary(username, filtersFromUrl(c.req.url));
     if (!summary) return c.json(apiError("not_found", "User not found"), 404);
     return c.json({
@@ -294,23 +317,17 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/sync-runs", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ runs: repo.listSyncRuns(username) });
   });
 
   app.get("/v1/sync/receipts", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ receipts: repo.listSyncReceipts(username) });
   });
 
   app.get("/v1/sync/receipts/:id", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const receipt = repo.getSyncReceipt(username, c.req.param("id"));
     if (!receipt)
       return c.json(apiError("not_found", "Receipt not found"), 404);
@@ -318,16 +335,12 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/source-health", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ sources: repo.sourceHealth(username) });
   });
 
   app.get("/v1/cost-guardrails", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const guardrails = repo.listCostGuardrails(username);
     if (!guardrails)
       return c.json(apiError("not_found", "User not found"), 404);
@@ -335,9 +348,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.post("/v1/cost-guardrails", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const body = await c.req.json().catch(() => null);
     const parsed = costGuardrailInputSchema.safeParse(body);
     if (!parsed.success)
@@ -360,16 +371,12 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/merge/issues", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ issues: repo.mergeIssues(username) });
   });
 
   app.post("/v1/merge/issues/:id/resolve", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const body = await c.req.json().catch(() => null);
     const parsed = mergeIssueResolutionInputSchema.safeParse(body);
     if (!parsed.success)
@@ -392,9 +399,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/exports", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const format = c.req.query("format") === "csv" ? "csv" : "json";
     const exported = repo.exportMetrics(username, {
       ...filtersFromUrl(c.req.url),
@@ -410,145 +415,42 @@ export function createApiApp(options: ApiAppOptions = {}) {
     });
   });
 
-  app.get("/v1/vault/exports", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
-    return c.json({ exports: repo.listVaultExports(username) });
-  });
-
-  app.get("/v1/vault/exports/:id", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
-    const exported = repo.getVaultExport(username, c.req.param("id"));
-    if (!exported)
-      return c.json(apiError("not_found", "Vault export not found"), 404);
-    return c.json(exported);
-  });
-
-  app.post("/v1/vault/exports", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
-    const body = await c.req.json().catch(() => null);
-    const parsed = vaultExportInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json(
-        apiError(
-          "invalid_payload",
-          "Invalid vault export payload",
-          parsed.error.issues,
-        ),
-        400,
-      );
-    }
-    if (parsed.data.includeContent) {
-      return c.json(
-        apiError(
-          "feature_not_enabled",
-          "TokSync content export is not enabled for the private vault",
-        ),
-        400,
-      );
-    }
-    const exported = repo.createVaultExport(username, parsed.data);
-    if (!exported) return c.json(apiError("not_found", "User not found"), 404);
-    return c.json(exported);
-  });
-
-  app.post("/v1/vault/imports/preview", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
-    const body = await c.req.json().catch(() => null);
-    const parsed = vaultImportPreviewInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json(
-        apiError(
-          "invalid_payload",
-          "Invalid vault import preview payload",
-          parsed.error.issues,
-        ),
-        400,
-      );
-    }
-    const result = repo.previewVaultImport(
-      username,
-      parsed.data.payload,
-      parsed.data.recoveryPassphrase,
-    );
-    return jsonResponse(result.response, result.status);
-  });
-
-  app.post("/v1/vault/imports", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
-    const body = await c.req.json().catch(() => null);
-    const parsed = vaultImportPreviewInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json(
-        apiError(
-          "invalid_payload",
-          "Invalid vault import payload",
-          parsed.error.issues,
-        ),
-        400,
-      );
-    }
-    const result = repo.importVault(
-      username,
-      parsed.data.payload,
-      parsed.data.recoveryPassphrase,
-    );
-    return jsonResponse(result.response, result.status);
-  });
+  registerVaultRoutes(app, repo);
 
   app.post("/v1/local/preview", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = localPreviewInputSchema.safeParse(body);
     const payload = parsed.success ? parsed.data.payload : body;
     const result = repo.previewLocalPayload(payload);
-    return jsonResponse(result.response, result.status);
+    return c.json(result.response, result.status as ContentfulStatusCode);
   });
 
   app.get("/v1/devices", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ devices: repo.listDevices(username) });
   });
 
   app.delete("/v1/devices/:id/data", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const result = repo.deleteDeviceData(username, c.req.param("id"));
     if (!result) return c.json(apiError("not_found", "Device not found"), 404);
     return c.json(result);
   });
 
   app.post("/v1/devices/:id/revoke", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const result = repo.revokeDevice(username, c.req.param("id"));
     if (!result) return c.json(apiError("not_found", "Device not found"), 404);
     return c.json(result);
   });
 
   app.get("/v1/settings/tokens", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json({ tokens: repo.listUserApiTokens(username) });
   });
 
   app.post("/v1/settings/tokens", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const body = await c.req.json().catch(() => null);
     const parsed = userApiTokenInputSchema.safeParse(body);
     if (!parsed.success)
@@ -564,18 +466,14 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.delete("/v1/settings/tokens/:id", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const result = repo.revokeUserApiToken(username, c.req.param("id"));
     if (!result) return c.json(apiError("not_found", "Token not found"), 404);
     return c.json(result);
   });
 
   app.delete("/v1/settings/submitted-data", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const result = repo.deleteSubmittedData(username);
     if (!result) return c.json(apiError("not_found", "User not found"), 404);
     return c.json(result);
@@ -593,16 +491,12 @@ export function createApiApp(options: ApiAppOptions = {}) {
         ),
         400,
       );
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     return c.json(repo.setPublicProfile(username, parsed.data));
   });
 
   app.get("/v1/public-profile", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const user = repo.getUser(username) ?? repo.seedDevelopmentUser(username);
     const publicStats = repo.getPublicStats(user.username);
     return c.json({
@@ -617,9 +511,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.post("/v1/leaderboard/opt-in", async (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const body = await c.req.json().catch(() => null);
     const parsed = leaderboardOptInInputSchema.safeParse(body);
     if (!parsed.success)
@@ -658,9 +550,7 @@ export function createApiApp(options: ApiAppOptions = {}) {
   });
 
   app.get("/v1/wrapped", (c) => {
-    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
-    if (!username)
-      return c.json(apiError("invalid_auth", "User session required"), 401);
+    const username = authUsername(c);
     const wrapped = repo.getPrivateWrapped(username);
     if (!wrapped) return c.json(apiError("not_found", "User not found"), 404);
     return c.json({ wrapped });
@@ -755,8 +645,6 @@ const OAUTH_STATE_MAX_AGE_SECONDS = 60 * 10;
 const DEV_SESSION_SECRET = "dev-session-secret-change-me";
 const DEFAULT_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 const LARGE_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
-const RATE_LIMIT_PRUNE_INTERVAL_MS = 60_000;
-const RATE_LIMIT_MAX_BUCKETS = 10_000;
 
 interface OAuthStateCookie {
   state: string;
@@ -788,7 +676,7 @@ function resolveDevAuth(explicit: boolean | undefined) {
   if (explicit !== undefined) return explicit;
   if (process.env.TOKSYNC_DEV_AUTH)
     return /^(1|true|yes)$/i.test(process.env.TOKSYNC_DEV_AUTH);
-  return process.env.NODE_ENV !== "production";
+  return false;
 }
 
 function resolveGitHubOAuth(
@@ -905,6 +793,21 @@ function userFromRequest(
     return isValidUsername(header) ? header : "demo";
   }
   return usernameFromSessionCookie(request, sessionSecret);
+}
+
+function authMiddleware(devAuth: boolean, sessionSecret: string) {
+  return async (c: Context, next: Next) => {
+    const username = userFromRequest(c.req.raw, devAuth, sessionSecret);
+    if (!username) {
+      return c.json(apiError("invalid_auth", "User session required"), 401);
+    }
+    c.set("username", username);
+    await next();
+  };
+}
+
+function authUsername(c: Context) {
+  return c.get("username") as string;
 }
 
 function sessionCookie(username: string, secret: string, requestUrl: string) {
@@ -1243,15 +1146,6 @@ function svgResponse(svg: string, status = 200) {
   });
 }
 
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-    },
-  });
-}
-
 function requestContext(logger: ApiLogger) {
   return async (c: Context, next: Next) => {
     const requestId = c.req.raw.headers.get("x-request-id") || randomUUID();
@@ -1349,86 +1243,4 @@ function payloadTooLarge(c: Context, maxSize: number) {
 
 function formatBytes(bytes: number) {
   return `${Math.floor(bytes / 1024 / 1024)}MB`;
-}
-
-interface RateLimitBucket {
-  count: number;
-  resetAt: number;
-}
-
-function rateLimit() {
-  const rateLimitBuckets = new Map<string, RateLimitBucket>();
-  let lastPrunedAt = 0;
-  return async (c: Context, next: Next) => {
-    const requestUrl = new URL(c.req.url);
-    const policy = rateLimitPolicy(requestUrl.pathname);
-    if (!policy) {
-      await next();
-      return;
-    }
-
-    const now = Date.now();
-    if (
-      now - lastPrunedAt > RATE_LIMIT_PRUNE_INTERVAL_MS ||
-      rateLimitBuckets.size > RATE_LIMIT_MAX_BUCKETS
-    ) {
-      pruneRateLimitBuckets(rateLimitBuckets, now);
-      lastPrunedAt = now;
-    }
-    const key = `${clientKey(c.req.raw)}:${policy.name}`;
-    const bucket = rateLimitBuckets.get(key);
-    const current =
-      bucket && bucket.resetAt > now
-        ? bucket
-        : { count: 0, resetAt: now + policy.windowMs };
-    current.count += 1;
-    rateLimitBuckets.set(key, current);
-    if (current.count > policy.limit) {
-      c.header(
-        "Retry-After",
-        String(Math.ceil((current.resetAt - now) / 1000)),
-      );
-      return c.json(
-        apiError("rate_limited", "Too many requests; retry after the window"),
-        429,
-      );
-    }
-
-    await next();
-  };
-}
-
-function pruneRateLimitBuckets(
-  buckets: Map<string, RateLimitBucket>,
-  now: number,
-) {
-  for (const [key, bucket] of buckets) {
-    if (bucket.resetAt <= now) buckets.delete(key);
-  }
-  while (buckets.size > RATE_LIMIT_MAX_BUCKETS) {
-    const oldestKey = buckets.keys().next().value as string | undefined;
-    if (!oldestKey) break;
-    buckets.delete(oldestKey);
-  }
-}
-
-function rateLimitPolicy(pathname: string) {
-  if (pathname.startsWith("/v1/auth/device/")) {
-    return { name: "auth-device", limit: 30, windowMs: 60_000 };
-  }
-  if (pathname === "/v1/sync/usage-batch") {
-    return { name: "sync-usage", limit: 120, windowMs: 60_000 };
-  }
-  if (pathname.startsWith("/v1/")) {
-    return { name: "api", limit: 600, windowMs: 60_000 };
-  }
-  return null;
-}
-
-function clientKey(request: Request) {
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "local"
-  );
 }

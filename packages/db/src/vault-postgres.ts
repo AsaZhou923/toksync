@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { vaultEncryptedPayloadSchema } from "@toksync/shared";
 import { vaultExports } from "./schema";
-import type { VaultArtifactStore } from "./repository";
+import type { VaultArtifactStore } from "./vault";
 import type { VaultExportRecord } from "./types";
 
 type DrizzleLikeDb = {

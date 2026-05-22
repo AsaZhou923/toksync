@@ -46,15 +46,15 @@ only, with no source/model subboards.
 
 ## Current Console
 
-| Surface            | Current behavior                                                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run                                                                         |
-| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs                     |
-| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault, Proof Pack, Wrapped       |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                                                |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, Proof Pack, Wrapped, CSP/security headers |
-| Public output      | README badge/profile-card SVG, Public Proof Pack, and public Wrapped card from public cache / receipt digest only                       |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                                          |
+| Surface            | Current behavior                                                                                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run, encrypted local device-token fallback                                                         |
+| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs                                            |
+| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault, Proof Pack, Wrapped, Redis-capable rate limiting |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                                                                       |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, Proof Pack, Wrapped, CSP/security headers                        |
+| Public output      | README badge/profile-card SVG, Public Proof Pack, and public Wrapped card from public cache / receipt digest only                                              |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                                                                 |
 
 ## Quick Start
 
@@ -65,6 +65,11 @@ pnpm db:reset
 pnpm db:seed
 pnpm dev
 ```
+
+Local browser/dev auth is explicit. Keep `TOKSYNC_DEV_AUTH=1` in `.env` for
+`--auto-authorize demo` and `X-TokSync-User` based local Web requests; leave it
+unset or `0` for hosted/prod-like auth checks. Device codes default to 900
+seconds and can be tuned with `DEVICE_CODE_TTL_SECONDS`.
 
 In another terminal:
 
@@ -83,6 +88,11 @@ Headless/private sync can use a user API token created from settings or the API:
 pnpm agent login --token tsk_...
 TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
 ```
+
+`TOKSYNC_API_TOKEN` is treated as a one-shot process input and is cleared from
+the current agent process after it is read. Device login stores `deviceToken` as
+`deviceTokenEncrypted` in `config.json` with AES-256-GCM and a local
+`config.key`; legacy plaintext config files load and migrate on the next save.
 
 Default local services:
 
@@ -120,6 +130,10 @@ for the hosted Postgres target, including the `vault_exports` ledger. Vault
 artifacts stay inline in the local file store by default, or can be written to a
 private object directory with `TOKSYNC_VAULT_ARTIFACT_DIR`.
 
+API rate limiting uses an in-process store for local development. Set
+`TOKSYNC_RATE_LIMIT_REDIS_URL=redis://...` or `rediss://...` before
+multi-instance hosted deployment to share counters across instances.
+
 ## Privacy Contract
 
 - Public profile is disabled by default.
@@ -151,22 +165,22 @@ metrics vault plus real-format source parity adapters, and v0.5 turns Public
 Proof Pack / Wrapped into visible app surfaces backed by public-safe API
 contracts:
 
-| Phase | Planned capability   | Boundary                                                                                      |
-| ----- | -------------------- | --------------------------------------------------------------------------------------------- |
-| v0.1  | Public label privacy | Implemented as private-by-default labels with explicit public toggle and safe-label filtering |
-| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                                                |
-| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                                                 |
-| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                                                  |
-| v0.2  | GitHub OAuth         | Implemented as first production browser login; email magic link deferred                      |
-| v0.2  | User API token       | Implemented for private/headless metrics sync                                                 |
-| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                      |
-| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                 |
-| v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                           |
-| v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing  |
-| v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import        |
-| v0.4+ | Stabilization gate   | FileStore contract tests, parser coverage, lock contention, vault-version regression coverage |
-| v0.5  | Public Proof Pack    | Implemented API and `/app/proof-pack` console from public aggregates plus receipt digests     |
-| v0.5  | Wrapped              | Implemented `/app/wrapped`, private summary, and public low-sensitivity Wrapped card          |
+| Phase | Planned capability   | Boundary                                                                                                    |
+| ----- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
+| v0.1  | Public label privacy | Implemented as private-by-default labels with explicit public toggle and safe-label filtering               |
+| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                                                              |
+| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                                                               |
+| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                                                                |
+| v0.2  | GitHub OAuth         | Implemented as first production browser login; email magic link deferred                                    |
+| v0.2  | User API token       | Implemented for private/headless metrics sync                                                               |
+| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                                    |
+| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                               |
+| v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                                         |
+| v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing                |
+| v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import                      |
+| v0.4+ | Stabilization gate   | FileStore repository mutation transactions, parser/component coverage, token encryption, Redis limit switch |
+| v0.5  | Public Proof Pack    | Implemented API and `/app/proof-pack` console from public aggregates plus receipt digests                   |
+| v0.5  | Wrapped              | Implemented `/app/wrapped`, private summary, and public low-sensitivity Wrapped card                        |
 
 Billing, subscriptions, payment providers, plan limits, billing UI, content
 sync, search, eval export, and source/model leaderboard subboards remain out of

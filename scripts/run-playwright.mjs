@@ -34,6 +34,7 @@ const baseEnv = {
   APP_URL: webUrl,
   PORT: apiPort,
   TOKSYNC_DB_FILE: testDbFile,
+  TOKSYNC_DEV_AUTH: "1",
   TOKSYNC_DEV_USER: "demo",
   TOKSYNC_SKIP_PLAYWRIGHT_WEBSERVER: "1",
 };

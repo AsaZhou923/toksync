@@ -1,36 +1,27 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
+import { type UsageEventV1 } from "@toksync/shared";
 import {
-  hashWorkspacePath,
-  sanitizeWorkspaceLabel,
-  workspaceLabelFromPath,
-} from "@toksync/privacy";
-import {
-  isoDateFromMs,
-  usageEventV1Schema,
-  type TokenBreakdown,
-  type UsageEventV1,
-} from "@toksync/shared";
-import { readJsonFileShape, type JsonFileShape } from "./source-parsers/shared";
+  fileId,
+  inferProvider,
+  isRecord,
+  numberValue,
+  optionalString,
+  readJsonFileShape,
+  recordValue,
+  type JsonFileShape,
+} from "./source-parsers/shared";
 import type { SourceParseContext } from "./source-parsers/shared";
+import {
+  clampTokens,
+  parseTimestamp,
+  subtractCachedOverlap,
+  tokenTotal,
+  usageEventFromCandidate,
+  type MetricCandidate,
+} from "./source-parsers/candidate";
+import { parseCursorCsv } from "./source-parsers/cursor";
 export type { SourceParseContext } from "./source-parsers/shared";
-
-interface MetricCandidate {
-  sourceSessionId?: string | undefined;
-  sourceMessageId?: string | undefined;
-  dedupKey?: string | undefined;
-  modelId: string;
-  providerId?: string | undefined;
-  timestampMs?: number | undefined;
-  tokens: TokenBreakdown;
-  costUsd?: number | undefined;
-  messageCount?: number | undefined;
-  workspacePath?: string | undefined;
-  workspaceLabel?: string | undefined;
-  agent?: string | undefined;
-}
 
 export async function parseSourceSpecificUsageFile(
   ctx: SourceParseContext,
@@ -55,86 +46,6 @@ export async function parseSourceSpecificUsageFile(
   }
 
   return null;
-}
-
-function parseCursorCsv(raw: string, ctx: SourceParseContext) {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const header = lines.shift();
-  if (!header) return [];
-
-  const headers = parseCsvLine(header).map((value) =>
-    value.trim().replace(/^"|"$/g, ""),
-  );
-  if (!headers.includes("Date") || !headers.includes("Model")) return [];
-
-  const index = (name: string) => headers.findIndex((item) => item === name);
-  const dateIndex = index("Date");
-  const modelIndex = index("Model");
-  const inputWithCacheIndex = index("Input (w/ Cache Write)");
-  const inputWithoutCacheIndex = index("Input (w/o Cache Write)");
-  const cacheReadIndex = index("Cache Read");
-  const outputIndex = index("Output Tokens");
-  const costIndex = index("Cost");
-  const cloudAgentIndex = index("Cloud Agent ID");
-  const automationIndex = index("Automation ID");
-  const kindIndex = index("Kind");
-  if (
-    [
-      dateIndex,
-      modelIndex,
-      inputWithCacheIndex,
-      inputWithoutCacheIndex,
-      cacheReadIndex,
-      outputIndex,
-    ].some((item) => item < 0)
-  ) {
-    return [];
-  }
-
-  const accountId = cursorAccountIdFromPath(ctx.file);
-  return lines
-    .map((line, lineIndex) => {
-      const fields = parseCsvLine(line).map((value) =>
-        value.trim().replace(/^"|"$/g, ""),
-      );
-      const date = fields[dateIndex] ?? "";
-      const modelId = fields[modelIndex] ?? "";
-      const timestampMs = parseTimestamp(date);
-      if (!date || !modelId || timestampMs === undefined) return null;
-
-      const inputWithCache = numberValue(fields[inputWithCacheIndex]) ?? 0;
-      const inputWithoutCache =
-        numberValue(fields[inputWithoutCacheIndex]) ?? 0;
-      const cacheRead = numberValue(fields[cacheReadIndex]) ?? 0;
-      const output = numberValue(fields[outputIndex]) ?? 0;
-      const costUsd =
-        costIndex >= 0 ? parseCursorCost(fields[costIndex] ?? "") : undefined;
-      const sourceMessageId =
-        optionalString(fields[cloudAgentIndex], fields[automationIndex]) ??
-        `${date}:${modelId}:${lineIndex + 1}`;
-      const tokens = clampTokens({
-        input: inputWithoutCache,
-        output,
-        cacheRead,
-        cacheWrite: Math.max(inputWithCache - inputWithoutCache, 0),
-        reasoning: 0,
-      });
-      if (tokenTotal(tokens) <= 0) return null;
-      return usageEventFromCandidate(ctx, {
-        sourceSessionId: `cursor-${accountId}`,
-        sourceMessageId,
-        modelId,
-        providerId: inferProvider(modelId, "cursor"),
-        timestampMs,
-        tokens,
-        costUsd,
-        agent: optionalString(fields[kindIndex]),
-      });
-    })
-    .filter((event): event is UsageEventV1 => Boolean(event));
 }
 
 function parseCopilotOtel(records: unknown[], ctx: SourceParseContext) {
@@ -765,113 +676,6 @@ function openClawTranscriptCandidate(
   };
 }
 
-function usageEventFromCandidate(
-  ctx: SourceParseContext,
-  candidate: MetricCandidate,
-): UsageEventV1 {
-  const timestampMs = candidate.timestampMs ?? Date.now();
-  const sourceSessionId = candidate.sourceSessionId ?? fileId(ctx.file);
-  const sourceMessageId = candidate.sourceMessageId;
-  const rawWorkspaceLabel =
-    candidate.workspaceLabel ??
-    (candidate.workspacePath
-      ? workspaceLabelFromPath(candidate.workspacePath)
-      : undefined);
-  const workspaceLabel = rawWorkspaceLabel
-    ? safeWorkspaceLabel(rawWorkspaceLabel)
-    : undefined;
-  const workspaceKeyHash =
-    !ctx.includeRawWorkspacePath &&
-    (candidate.workspacePath || rawWorkspaceLabel)
-      ? hashWorkspacePath(
-          candidate.workspacePath ?? `${ctx.source}:${rawWorkspaceLabel}`,
-          ctx.workspaceHashSecret,
-        )
-      : undefined;
-  const dedupSeed = [
-    ctx.source,
-    sourceSessionId,
-    sourceMessageId,
-    timestampMs,
-    candidate.modelId,
-  ].join(":");
-  const costUsd =
-    candidate.costUsd ??
-    (pricingForModel(candidate.modelId)
-      ? estimateCostUsd(candidate.modelId, candidate.tokens)
-      : undefined);
-  return usageEventV1Schema.parse({
-    schemaVersion: 1,
-    source: ctx.source,
-    sourceSessionId,
-    ...(sourceMessageId ? { sourceMessageId } : {}),
-    dedupKey:
-      candidate.dedupKey ??
-      `${ctx.source}:${createHash("sha256").update(dedupSeed).digest("hex")}`,
-    deviceId: ctx.deviceId,
-    ...(workspaceKeyHash ? { workspaceKeyHash } : {}),
-    ...(workspaceLabel ? { workspaceLabel } : {}),
-    ...(candidate.agent ? { agent: candidate.agent } : {}),
-    modelId: candidate.modelId,
-    providerId:
-      candidate.providerId ?? inferProvider(candidate.modelId, "unknown"),
-    timestampMs,
-    localDate: isoDateFromMs(timestampMs),
-    tokens: candidate.tokens,
-    ...(costUsd === undefined ? {} : { costUsd }),
-    messageCount: candidate.messageCount ?? 1,
-    isTurnStart: true,
-  });
-}
-
-function parseCsvLine(line: string) {
-  const fields: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (char === '"' && line[index + 1] === '"') {
-      current += '"';
-      index += 1;
-      continue;
-    }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      current += char;
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      fields.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  fields.push(current);
-  return fields;
-}
-
-function cursorAccountIdFromPath(file: string) {
-  const name = path.basename(file);
-  if (name === "usage.csv") return "active";
-  const matched = /^usage\.(.+)\.csv$/i.exec(name);
-  return matched?.[1]?.replace(/[^A-Za-z0-9._-]/g, "-") || "unknown";
-}
-
-function parseCursorCost(value: string) {
-  const cleaned = value.replace(/[$,]/g, "").trim();
-  if (
-    !cleaned ||
-    cleaned === "-" ||
-    /^included$/i.test(cleaned) ||
-    /^nan$/i.test(cleaned)
-  ) {
-    return 0;
-  }
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
 const MODEL_ATTRS = ["gen_ai.response.model", "gen_ai.request.model"];
 const SESSION_ATTRS: Array<[string, number]> = [
   ["gen_ai.conversation.id", 3],
@@ -1103,117 +907,9 @@ function normalizeGeminiInput(
   return [Math.max(input, 0), Math.max(cached, 0)];
 }
 
-function subtractCachedOverlap(
-  input: number,
-  cached: number,
-): [number, number] {
-  const safeInput = Math.max(input, 0);
-  const safeCached = Math.max(cached, 0);
-  return [Math.max(safeInput - Math.min(safeInput, safeCached), 0), safeCached];
-}
-
-function clampTokens(tokens: TokenBreakdown): TokenBreakdown {
-  return {
-    input: Math.max(Math.trunc(tokens.input), 0),
-    output: Math.max(Math.trunc(tokens.output), 0),
-    cacheRead: Math.max(Math.trunc(tokens.cacheRead), 0),
-    cacheWrite: Math.max(Math.trunc(tokens.cacheWrite), 0),
-    reasoning: Math.max(Math.trunc(tokens.reasoning), 0),
-  };
-}
-
-function tokenTotal(tokens: TokenBreakdown) {
-  return (
-    tokens.input +
-    tokens.output +
-    tokens.cacheRead +
-    tokens.cacheWrite +
-    tokens.reasoning
-  );
-}
-
-function safeWorkspaceLabel(label: string) {
-  return looksLikePath(label)
-    ? workspaceLabelFromPath(label)
-    : sanitizeWorkspaceLabel(label);
-}
-
-function looksLikePath(value: string) {
-  return (
-    /^[A-Za-z]:[\\/]/.test(value) ||
-    value.startsWith("/") ||
-    value.startsWith("\\\\") ||
-    value.includes("\\") ||
-    value.includes("/")
-  );
-}
-
-function inferProvider(modelId: string, fallback: string) {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("claude")) return "anthropic";
-  if (lower.includes("gemini")) return "google";
-  if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4")) {
-    return "openai";
-  }
-  if (lower.includes("deepseek")) return "deepseek";
-  if (lower.includes("llama")) return "meta";
-  if (lower.includes("qwen")) return "alibaba";
-  return fallback;
-}
-
-function fileId(file: string) {
-  return path.basename(file).replace(/\.[^.]+$/, "");
-}
-
 function openClawSessionIdFromPath(file: string) {
   const name = path.basename(file);
   const jsonlIndex = name.toLowerCase().indexOf(".jsonl");
   if (jsonlIndex > 0) return name.slice(0, jsonlIndex);
   return fileId(file);
-}
-
-function recordValue(value: unknown) {
-  return isRecord(value) ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function optionalString(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value))
-      return String(value);
-  }
-  return undefined;
-}
-
-function numberValue(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (
-      typeof value === "string" &&
-      value.trim() &&
-      Number.isFinite(Number(value))
-    ) {
-      return Number(value);
-    }
-  }
-  return undefined;
-}
-
-function parseTimestamp(value: unknown) {
-  const numeric = numberValue(value);
-  if (numeric !== undefined) {
-    if (numeric > 1_000_000_000_000_000) return timestampUnixNano(numeric);
-    if (numeric > 1_000_000_000_000) return Math.trunc(numeric);
-    if (numeric > 1_000_000_000) return Math.trunc(numeric * 1000);
-    return Math.trunc(numeric);
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }

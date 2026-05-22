@@ -2,6 +2,114 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-22-v0-5-hardening-follow-up"></a>
+
+## 2026-05-22 - v0.5 hardening follow-up
+
+日期：2026-05-22
+
+本次更新收口 v0.5 深度审查后的生产化与可维护性问题：让本地开发认证改为显式开关，给 agent 本地 token 增加 AES-GCM fallback 加密，把 API rate limit / Vault / collector / repository 的高风险职责拆到更清晰的边界，并用回归测试锁住这些行为。Public Proof Pack、Wrapped、leaderboard、README SVG 等公开面仍只读取低敏 public aggregate 或 receipt digest，不扩大 metrics-only 边界。
+
+## 概览
+
+- 本地 browser/dev auth 默认关闭，仅在 `TOKSYNC_DEV_AUTH=1` 或测试显式传入 `devAuth: true` 时信任 `X-TokSync-User` / `TOKSYNC_DEV_USER`。
+- Agent config 写入 `deviceTokenEncrypted`，使用 AES-256-GCM 与本机 `config.key`；旧明文 config 仍可读取并在下一次保存时迁移。
+- API 新增全局 JSON error handler、共享认证 middleware、可配置 `DEVICE_CODE_TTL_SECONDS` 和 Redis-backed rate limit 开关。
+- Private Usage Vault routes 拆到 `apps/api/src/routes/vault.ts`，Vault artifact/encryption/import helpers 拆到 `packages/db/src/vault.ts`。
+- Collector 共享 parser helper、candidate normalization 和 Cursor CSV parser 独立出来，generic dedup key 统一包含 `modelId` 并扩展 provider inference。
+- FileStore mutation 改走锁内 transaction reread，避免 stale reader 覆盖并发写入。
+
+## Agent / Collector
+
+- `TOKSYNC_API_TOKEN` 作为一次性进程输入读取后清出当前 agent 进程环境。
+- `apps/agent/src/config.test.ts` 覆盖 encrypted token 保存与 legacy plaintext migration。
+- `discoverSources()` 支持注入 env/home/listUsageFiles，便于测试 Codex/Copilot discovery 而不依赖真实用户目录。
+- `packages/collector-core/src/source-parsers/candidate.ts` 统一 metrics candidate 转 `UsageEventV1`，继续过滤 raw workspace path。
+- `packages/collector-core/src/source-parsers/cursor.ts` 负责 Cursor usage CSV 解析，保持 metrics-only 输出。
+
+## API / Storage
+
+- `AUTH_REQUIRED_ROUTES` + `authMiddleware()` 替代私有路由内重复的 session/header 判断。
+- `app.onError()` 把未捕获异常稳定成 `internal_error` JSON，避免 Hono 默认错误文本泄露到客户端。
+- `apps/api/src/rate-limit.ts` 默认使用内存 store；设置 `TOKSYNC_RATE_LIMIT_REDIS_URL=redis://...` 或 `rediss://...` 后启用 Redis store。
+- `apps/api/src/index.ts` 会读取 repo root `.env`，让本地 `pnpm dev` 和 Playwright flow 共享同一套 dev auth / TTL 配置。
+- `TokSyncRepository` 的持久化 mutation 统一通过 FileStore transaction 执行，新增 stale reader 合并和 repository mutation transaction 回归。
+- Vault export/import 的 artifact store、scrypt/AES-GCM、snapshot parse、device recovery 和 view 映射移入 `packages/db/src/vault.ts`。
+
+## Web / Security
+
+- Web CSP `connect-src` 移除裸 `https:`，只保留 self、配置 API origin 和 localhost API。
+- Vitest 覆盖 TSX app/page 与 console components，确保 dashboard、Vault、Proof Pack、Wrapped 和 token controls 的关键文本与隐私断言可回归。
+
+## Privacy / Public Data
+
+- Public profile、badge/card、leaderboard、Public Proof Pack 和 public Wrapped 不读取 private raw events。
+- Agent config 加密只保护本地 device token；它不改变 sync payload，payload 仍保持 metrics-only。
+- Redis rate limit 只保存计数键，不保存 prompt、assistant reply、tool payload、file content 或原始项目路径。
+
+## 文档同步
+
+- `README.md`、`README.zh-CN.md` 已同步 dev auth、device code TTL、agent token encryption、Redis-backed rate limit 和 stabilization gate 状态。
+- 外部 `api-design.md`、`auth-and-permission.md`、`local-development.md`、`testing.md`、当前功能指南与 v0.5 审查报告已对齐当前实现。
+- 外部 Update Logs 镜像需继续保持与本 changelog 一致。
+
+## 影响文件
+
+### Apps
+
+- `.env.example`
+- `.gitignore`
+- `.prettierignore`
+- `apps/agent/src/config.ts`
+- `apps/agent/src/config.test.ts`
+- `apps/agent/src/index.ts`
+- `apps/agent/src/index.test.ts`
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/api/src/index.ts`
+- `apps/api/src/rate-limit.ts`
+- `apps/api/src/rate-limit.test.ts`
+- `apps/api/src/routes/vault.ts`
+- `apps/web/app/app/page.test.tsx`
+- `apps/web/components/console-components.test.tsx`
+- `apps/web/next.config.mjs`
+- `apps/web/next.config.test.ts`
+
+### Packages / Scripts
+
+- `packages/collector-core/src/index.ts`
+- `packages/collector-core/src/index.test.ts`
+- `packages/collector-core/src/source-parsers.ts`
+- `packages/collector-core/src/source-parsers/shared.ts`
+- `packages/collector-core/src/source-parsers/candidate.ts`
+- `packages/collector-core/src/source-parsers/cursor.ts`
+- `packages/db/src/index.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/repository.test.ts`
+- `packages/db/src/store.ts`
+- `packages/db/src/vault.ts`
+- `packages/db/src/vault-postgres.ts`
+- `packages/shared/src/errors.ts`
+- `scripts/perf-smoke.ts`
+- `scripts/run-playwright.mjs`
+- `vitest.config.ts`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- `docs/changelog/CHANGELOG_WORKFLOW.md` external mirror
+- `E:\Project Code\docs\01 - Projects\TokSync\01 - Product\TokSync 文档变更清单.md`
+
+## 验证
+
+- `pnpm exec prettier --check docs/changelog/CHANGELOG.md docs/changelog/CHANGELOG_WORKFLOW.md "E:/Project Code/docs/01 - Projects/TokSync/01 - Product/TokSync 文档变更清单.md"`
+- 外部 Update Logs `CHANGELOG.md` / `CHANGELOG_WORKFLOW.md` 与仓库内版本 SHA256 一致。
+- `pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic`
+- `pnpm test apps/agent/src/index.test.ts`
+- `pnpm test:full`
+
 <a id="2026-05-22-v0-5-proof-wrapped-web-console"></a>
 
 ## 2026-05-22 - v0.5 proof and wrapped web console

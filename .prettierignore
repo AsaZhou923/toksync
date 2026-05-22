@@ -4,6 +4,7 @@ dist/
 coverage/
 .turbo/
 .omx/
+.claude/
 .tmp/
 .playwright-mcp/
 output/

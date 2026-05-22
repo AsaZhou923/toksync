@@ -22,6 +22,21 @@ export class FileTokSyncStore {
 
   read(): TokSyncData {
     if (this.data && !this.hasExternalChange()) return this.data;
+    return this.readFromDisk();
+  }
+
+  transaction<T>(
+    operation: (data: TokSyncData) => { result: T; commit: boolean },
+  ): T {
+    return this.withLock(() => {
+      const data = this.readFromDisk();
+      const { result, commit } = operation(data);
+      if (commit) this.writeUnlocked(data);
+      return result;
+    });
+  }
+
+  private readFromDisk(): TokSyncData {
     if (!fs.existsSync(this.filePath)) {
       this.data = emptyTokSyncData();
       this.lastLoadedMtimeMs = null;
@@ -48,11 +63,7 @@ export class FileTokSyncStore {
         );
       }
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-      const tempPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
-      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`);
-      replaceFileSync(tempPath, this.filePath);
-      this.data = data;
-      this.lastLoadedMtimeMs = this.currentMtimeMs();
+      this.writeUnlocked(data);
     });
   }
 
@@ -100,6 +111,15 @@ export class FileTokSyncStore {
       fs.closeSync(fd);
       fs.rmSync(lockPath, { force: true });
     }
+  }
+
+  private writeUnlocked(data: TokSyncData) {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    const tempPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`);
+    replaceFileSync(tempPath, this.filePath);
+    this.data = data;
+    this.lastLoadedMtimeMs = this.currentMtimeMs();
   }
 
   private removeStaleLock(lockPath: string) {

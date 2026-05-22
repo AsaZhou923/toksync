@@ -11,7 +11,7 @@ function testContext() {
   const repo = new TokSyncRepository(
     new FileTokSyncStore(path.join(dir, "db.json")),
   );
-  return { api: createApiApp({ repo }), repo };
+  return { api: createApiApp({ repo, devAuth: true }), repo };
 }
 
 function lockedContext(options: Parameters<typeof createApiApp>[0] = {}) {
@@ -251,6 +251,64 @@ describe("TokSync API", () => {
     ]) {
       expect((await request()).status).toBe(401);
     }
+  });
+
+  it("keeps development auth behind an explicit switch", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-api-dev-auth-"));
+    const repo = new TokSyncRepository(
+      new FileTokSyncStore(path.join(dir, "db.json")),
+    );
+    const previous = process.env.TOKSYNC_DEV_AUTH;
+
+    try {
+      delete process.env.TOKSYNC_DEV_AUTH;
+      const disabled = createApiApp({ repo });
+      expect(
+        (
+          await disabled.request("/v1/auth/session", {
+            headers: { "X-TokSync-User": "demo" },
+          })
+        ).status,
+      ).toBe(401);
+
+      process.env.TOKSYNC_DEV_AUTH = "1";
+      const enabled = createApiApp({ repo });
+      const session = await enabled.request("/v1/auth/session", {
+        headers: { "X-TokSync-User": "demo" },
+      });
+      expect(session.status).toBe(200);
+      expect(await json<any>(session)).toMatchObject({
+        user: { username: "demo" },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TOKSYNC_DEV_AUTH;
+      } else {
+        process.env.TOKSYNC_DEV_AUTH = previous;
+      }
+    }
+  });
+
+  it("returns structured JSON for uncaught route errors", async () => {
+    const repo = {
+      authSession: () => {
+        throw new Error("synthetic failure");
+      },
+    } as unknown as TokSyncRepository;
+    const api = createApiApp({ repo, devAuth: true });
+
+    const response = await api.request("/v1/auth/session", {
+      headers: { "X-TokSync-User": "demo" },
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await json<any>(response)).toMatchObject({
+      error: {
+        code: "internal_error",
+        message: "Internal server error",
+      },
+    });
   });
 
   it("authenticates hosted users through GitHub OAuth session cookies", async () => {

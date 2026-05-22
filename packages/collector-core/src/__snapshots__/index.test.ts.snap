@@ -4,7 +4,7 @@ exports[`collector-core fixtures > normalizes claude/basic 1`] = `
 [
   {
     "costUsd": 0.0075,
-    "dedupKey": "claude:b3291743c30baccb8fb9f79e05d72879c1bcbe009919f903a688f07b6ac08649",
+    "dedupKey": "claude:3e6ad06407f3d0e6bc02687fa22aa971050210240bea4440a916ad44427e8dfb",
     "modelId": "claude-3-5-sonnet",
     "providerId": "anthropic",
     "source": "claude",
@@ -21,7 +21,7 @@ exports[`collector-core fixtures > normalizes claude/basic 1`] = `
   },
   {
     "costUsd": 0.0062,
-    "dedupKey": "claude:97b7a6a9bbfd595b7f0254479fc4425a1ff1aaadcc0d1c6fce225d35d974b78f",
+    "dedupKey": "claude:70a649370fda86d7dcf708e57616afb57bbea3fe7db397cd92d0ff8a8bcab567",
     "modelId": "claude-3-5-sonnet",
     "providerId": "anthropic",
     "source": "claude",
@@ -43,7 +43,7 @@ exports[`collector-core fixtures > normalizes codex/basic 1`] = `
 [
   {
     "costUsd": 0.0123,
-    "dedupKey": "codex:5806ff8e5bee55a03b9622fdaa1ae53eaee3b97a8cf9d13961aab4205690c11c",
+    "dedupKey": "codex:a1e8cb1dc30bce477b5c9721be1268132840cbb3f3ad5b3154f3427c2af1af64",
     "modelId": "gpt-5.4",
     "providerId": "openai",
     "source": "codex",
@@ -60,7 +60,7 @@ exports[`collector-core fixtures > normalizes codex/basic 1`] = `
   },
   {
     "costUsd": 0.0081,
-    "dedupKey": "codex:3df0a2cee293d894a9a82d88082a1e3ceb0aac26285cf659a3f61cf8c6a421e7",
+    "dedupKey": "codex:de8352324d76e49e24a108b729dea0c7d361a148c173834b862051aae39b9f2c",
     "modelId": "gpt-5.4",
     "providerId": "openai",
     "source": "codex",
@@ -82,7 +82,7 @@ exports[`collector-core fixtures > normalizes opencode/basic 1`] = `
 [
   {
     "costUsd": 0.0052,
-    "dedupKey": "opencode:d6ed41e26fe169516d2b6916e6d9282f9913283bb01b184fda48c1186edc6588",
+    "dedupKey": "opencode:908c6f01a47c35a9749a82c922d421ccbeec43036eb150f48b8e38627924447b",
     "modelId": "gpt-5.4",
     "providerId": "openai",
     "source": "opencode",
@@ -99,7 +99,7 @@ exports[`collector-core fixtures > normalizes opencode/basic 1`] = `
   },
   {
     "costUsd": 0.0049,
-    "dedupKey": "opencode:6bc9129e0fe23a4ec18c37858596239b3621d8bbbd159e4c55b46aa2ede625a0",
+    "dedupKey": "opencode:21300530fcf626554d9cf957c9e4390267af7c6092938e7cbc8ef612936eaf64",
     "modelId": "gpt-5.4",
     "providerId": "openai",
     "source": "opencode",

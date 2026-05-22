@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FileTokSyncStore } from "./store";
 import { FileVaultArtifactStore, TokSyncRepository } from "./repository";
 import { PostgresVaultExportRepository } from "./vault-postgres";
-import type { VaultExportRecord } from "./types";
+import type { TokSyncData, VaultExportRecord } from "./types";
 
 class FakeVaultDb {
   rows: any[] = [];
@@ -59,6 +59,23 @@ class FakeVaultArtifactStore {
 
   get(storageKey: string) {
     return this.payloads.get(storageKey) ?? null;
+  }
+}
+
+class TrackingFileStore extends FileTokSyncStore {
+  writes = 0;
+  transactions = 0;
+
+  override write(data?: TokSyncData) {
+    this.writes += 1;
+    return super.write(data);
+  }
+
+  override transaction<T>(
+    operation: (data: TokSyncData) => { result: T; commit: boolean },
+  ): T {
+    this.transactions += 1;
+    return super.transaction(operation);
   }
 }
 
@@ -189,6 +206,28 @@ describe("TokSyncRepository", () => {
     });
   });
 
+  it("uses DEVICE_CODE_TTL_SECONDS when creating device codes", () => {
+    const previous = process.env.DEVICE_CODE_TTL_SECONDS;
+    process.env.DEVICE_CODE_TTL_SECONDS = "60";
+    try {
+      const repo = createRepo();
+      const started = repo.createDeviceCode({
+        deviceName: "Short lived device",
+        platform: "windows",
+        agentVersion: "0.1.0",
+        deviceFingerprint: "short-lived",
+      });
+
+      expect(started.expiresIn).toBe(60);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DEVICE_CODE_TTL_SECONDS;
+      } else {
+        process.env.DEVICE_CODE_TTL_SECONDS = previous;
+      }
+    }
+  });
+
   it("prevents stale FileStore writes from overwriting concurrent disk changes", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
     const file = path.join(dir, "db.json");
@@ -226,6 +265,75 @@ describe("TokSyncRepository", () => {
       updatedAt: "2026-05-17T00:00:00.000Z",
     });
     expect(() => secondStore.write(secondData)).toThrow(/changed on disk/);
+  });
+
+  it("merges FileStore transactions from stale readers by rereading under the lock", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
+    const file = path.join(dir, "db.json");
+    const firstStore = new FileTokSyncStore(file);
+    const secondStore = new FileTokSyncStore(file);
+    firstStore.reset();
+    secondStore.read();
+
+    firstStore.transaction((data) => {
+      data.users.push({
+        id: "user-1",
+        username: "demo",
+        usernameLower: "demo",
+        publicProfileEnabled: false,
+        showCost: false,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+        showWorkspaceBreakdown: false,
+        createdAt: "2026-05-22T00:00:00.000Z",
+        updatedAt: "2026-05-22T00:00:00.000Z",
+      });
+      return { commit: true, result: null };
+    });
+
+    secondStore.transaction((data) => {
+      data.users.push({
+        id: "user-2",
+        username: "other",
+        usernameLower: "other",
+        publicProfileEnabled: false,
+        showCost: false,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+        showWorkspaceBreakdown: false,
+        createdAt: "2026-05-22T00:00:00.000Z",
+        updatedAt: "2026-05-22T00:00:00.000Z",
+      });
+      return { commit: true, result: null };
+    });
+
+    expect(
+      new FileTokSyncStore(file).read().users.map((user) => user.username),
+    ).toEqual(["demo", "other"]);
+  });
+
+  it("routes repository mutations through FileStore transactions", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
+    const store = new TrackingFileStore(path.join(dir, "db.json"));
+    const repo = new TokSyncRepository(store);
+    const auth = authorizeDevice(repo);
+
+    repo.setPublicProfile("demo", {
+      enabled: true,
+      showCost: false,
+      showSourceBreakdown: true,
+      showModelBreakdown: false,
+    });
+    repo.upsertCostGuardrail("demo", {
+      scope: "global",
+      period: "daily",
+      limitUsd: 10,
+      enabled: true,
+    });
+    repo.revokeDevice("demo", auth.deviceId);
+
+    expect(store.transactions).toBeGreaterThanOrEqual(6);
+    expect(store.writes).toBe(0);
   });
 
   it("waits for an active FileStore lock held by another process", async () => {

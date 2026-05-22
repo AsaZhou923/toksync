@@ -1,13 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { createHash } from "node:crypto";
 import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
-import {
-  hashWorkspacePath,
-  sanitizeWorkspaceLabel,
-  workspaceLabelFromPath,
-} from "@toksync/privacy";
+import { hashWorkspacePath, workspaceLabelFromPath } from "@toksync/privacy";
 import {
   SOURCE_REGISTRY,
   isoDateFromMs,
@@ -16,6 +11,19 @@ import {
   type UsageEventV1,
 } from "@toksync/shared";
 import { parseSourceSpecificUsageFile } from "./source-parsers";
+import {
+  fileId,
+  inferProvider,
+  isRecord,
+  numberValue,
+  optionalString,
+  recordValue,
+  safeJsonParse,
+  safeWorkspaceLabel,
+  stringValue,
+  timestampValue,
+  usageDedupKey,
+} from "./source-parsers/shared";
 
 export interface SourceLocation {
   source: BuiltInSourceId;
@@ -46,28 +54,37 @@ export interface CollectLogEntry {
   message: string;
 }
 
+export interface DiscoverSourcesOptions {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  listUsageFiles?: (
+    root: string,
+    source?: BuiltInSourceId,
+  ) => Promise<string[]>;
+}
+
 export async function discoverSources(
   sources: string[] = SOURCE_REGISTRY.map((source) => source.id),
+  options: DiscoverSourcesOptions = {},
 ): Promise<SourceLocation[]> {
-  const home = os.homedir();
+  const home = options.homeDir ?? os.homedir();
+  const env = options.env ?? process.env;
+  const listFiles = options.listUsageFiles ?? listUsageFiles;
   const locations: SourceLocation[] = [];
   for (const source of SOURCE_REGISTRY.filter((item) =>
     sources.includes(item.id),
   )) {
     const roots =
-      source.id === "codex" && process.env.CODEX_HOME
-        ? [path.join(process.env.CODEX_HOME, "sessions")]
+      source.id === "codex" && env.CODEX_HOME
+        ? [path.join(env.CODEX_HOME, "sessions")]
         : source.defaultRelativePaths.map((relative) =>
             path.join(home, relative),
           );
-    if (
-      source.id === "copilot" &&
-      process.env.COPILOT_OTEL_FILE_EXPORTER_PATH
-    ) {
-      roots.push(process.env.COPILOT_OTEL_FILE_EXPORTER_PATH);
+    if (source.id === "copilot" && env.COPILOT_OTEL_FILE_EXPORTER_PATH) {
+      roots.push(env.COPILOT_OTEL_FILE_EXPORTER_PATH);
     }
     for (const root of [...new Set(roots)]) {
-      const files = await listUsageFiles(root, source.id).catch(() => []);
+      const files = await listFiles(root, source.id).catch(() => []);
       locations.push({
         source: source.id,
         path: root,
@@ -410,13 +427,7 @@ function normalizeRecord(
       record.provider,
       payload?.model_provider,
       ctx.fileState.providerId,
-    ) ?? guessProvider(modelId);
-  const dedupSeed = [
-    ctx.source,
-    sourceSessionId,
-    sourceMessageId,
-    timestampMs,
-  ].join(":");
+    ) ?? inferProvider(modelId);
 
   const event = {
     schemaVersion: 1 as const,
@@ -425,7 +436,13 @@ function normalizeRecord(
     sourceMessageId,
     dedupKey:
       optionalString(record.dedupKey, record.dedup_key) ??
-      `${ctx.source}:${createHash("sha256").update(dedupSeed).digest("hex")}`,
+      usageDedupKey({
+        source: ctx.source,
+        sourceSessionId,
+        sourceMessageId,
+        timestampMs,
+        modelId,
+      }),
     deviceId: ctx.deviceId,
     workspaceKeyHash,
     workspaceLabel,
@@ -594,95 +611,11 @@ function inferSourceFromPath(filePath: string): BuiltInSourceId {
   return "codex";
 }
 
-function fileId(file: string) {
-  return path.basename(file).replace(/\.[^.]+$/, "");
-}
-
-function safeWorkspaceLabel(label: string) {
-  return looksLikePath(label)
-    ? workspaceLabelFromPath(label)
-    : sanitizeWorkspaceLabel(label);
-}
-
-function looksLikePath(value: string) {
-  return (
-    /^[A-Za-z]:[\\/]/.test(value) ||
-    value.startsWith("/") ||
-    value.startsWith("\\\\") ||
-    value.includes("\\") ||
-    value.includes("/")
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function stringValue(...values: unknown[]) {
-  return optionalString(...values) ?? "";
-}
-
-function optionalString(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value;
-    if (typeof value === "number" && Number.isFinite(value))
-      return String(value);
-  }
-  return undefined;
-}
-
-function numberValue(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (
-      typeof value === "string" &&
-      value.trim() &&
-      Number.isFinite(Number(value))
-    )
-      return Number(value);
-  }
-  return undefined;
-}
-
-function timestampValue(...values: unknown[]) {
-  for (const value of values) {
-    const numeric = numberValue(value);
-    if (numeric !== undefined) return numeric;
-    if (typeof value === "string" && value.trim()) {
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return undefined;
-}
-
 function cacheCreationTotal(value: unknown) {
   if (!isRecord(value)) return undefined;
   const oneHour = numberValue(value.ephemeral_1h_input_tokens) ?? 0;
   const fiveMinutes = numberValue(value.ephemeral_5m_input_tokens) ?? 0;
   return oneHour + fiveMinutes || undefined;
-}
-
-function recordValue(value: unknown) {
-  return isRecord(value) ? value : undefined;
-}
-
-function guessProvider(modelId: string) {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("claude")) return "anthropic";
-  if (lower.includes("gemini")) return "google";
-  if (lower.includes("gpt") || lower.includes("o3") || lower.includes("o4"))
-    return "openai";
-  return "unknown";
-}
-
-function safeJsonParse(raw: string) {
-  return JSON.parse(raw, (key, value) => {
-    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      throw new Error(`Unsafe JSON key rejected: ${key}`);
-    }
-    return value;
-  });
 }
 
 async function exists(filePath: string) {

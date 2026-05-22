@@ -13,6 +13,7 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "expired_code"
   | "consumed_code"
+  | "internal_error"
   | "rate_limited";
 
 export function apiError(

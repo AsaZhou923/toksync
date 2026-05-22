@@ -2,6 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import {
   collectUsageEvents,
@@ -203,7 +204,7 @@ program
     }
 
     if (options.dryRun) return;
-    const writeToken = process.env.TOKSYNC_API_TOKEN || config.deviceToken;
+    const writeToken = resolveWriteToken(config.deviceToken);
     if (!writeToken || !config.deviceId) {
       throw new Error("Run toksync login before sync, or use --dry-run");
     }
@@ -239,10 +240,12 @@ program
     );
   });
 
-program.parseAsync(process.argv).catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (isMainModule()) {
+  program.parseAsync(process.argv).catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
 
 async function postJson(url: string, body: unknown, token?: string) {
   const response = await fetch(url, {
@@ -273,7 +276,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function chunk<T>(items: T[], size: number) {
+export function chunk<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
     chunks.push(items.slice(index, index + size));
@@ -281,7 +284,7 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
-function summarizeSyncResponses(responses: any[]) {
+export function summarizeSyncResponses(responses: any[]) {
   return {
     status: responses.every((response) => response.status === "accepted")
       ? "accepted"
@@ -318,7 +321,7 @@ function objectValue(value: unknown) {
     : { value };
 }
 
-function buildLocalReceipt(batch: unknown) {
+export function buildLocalReceipt(batch: unknown) {
   assertMetricsOnlyPayload(batch);
   return {
     payloadDigest: `sha256:${sha256Base64Url(JSON.stringify(batch))}`,
@@ -348,4 +351,19 @@ function buildLocalReceipt(batch: unknown) {
       "device names",
     ],
   };
+}
+
+export function resolveWriteToken(configToken?: string) {
+  const envToken = process.env.TOKSYNC_API_TOKEN;
+  if (!envToken) return configToken;
+  delete process.env.TOKSYNC_API_TOKEN;
+  console.warn(
+    "Using TOKSYNC_API_TOKEN for this sync only; it has been cleared from the current process environment.",
+  );
+  return envToken;
+}
+
+function isMainModule() {
+  const entry = process.argv[1];
+  return Boolean(entry && import.meta.url === pathToFileURL(entry).href);
 }

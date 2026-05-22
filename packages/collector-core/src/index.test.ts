@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectUsageEvents, discoverSources, summarizeEvents } from "./index";
 
 const root = path.resolve("packages/test-fixtures");
@@ -327,6 +327,47 @@ describe("collector-core fixtures", () => {
     }
   });
 
+  it("discovers source roots through an injected file lister", async () => {
+    const listUsageFiles = vi.fn(async (root: string) =>
+      root.includes("present") || root.endsWith("otel.jsonl")
+        ? [path.join(root, "usage.jsonl")]
+        : [],
+    );
+
+    const locations = await discoverSources(["codex", "copilot"], {
+      env: {
+        CODEX_HOME: path.join("C:", "present", "codex"),
+        COPILOT_OTEL_FILE_EXPORTER_PATH: path.join(
+          "C:",
+          "present",
+          "otel.jsonl",
+        ),
+      },
+      homeDir: path.join("C:", "Users", "demo"),
+      listUsageFiles,
+    });
+
+    expect(listUsageFiles).toHaveBeenCalledWith(
+      path.join("C:", "present", "codex", "sessions"),
+      "codex",
+    );
+    expect(locations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "codex",
+          exists: true,
+          fileCount: 1,
+        }),
+        expect.objectContaining({
+          source: "copilot",
+          path: path.join("C:", "present", "otel.jsonl"),
+          exists: true,
+          fileCount: 1,
+        }),
+      ]),
+    );
+  });
+
   it("does not upload raw absolute workspace labels", async () => {
     const rawPath = "C:\\Users\\alice\\private-client\\source";
     const fixture = writeFixture("codex", [
@@ -367,6 +408,33 @@ describe("collector-core fixtures", () => {
     ]);
     expect(result.events[0]?.dedupKey).toBe(result.events[1]?.dedupKey);
     expect(result.events[0]?.dedupKey).toMatch(/^codex:/);
+  });
+
+  it("includes model id in generic dedup keys and recognizes newer providers", async () => {
+    const fixture = writeFixture("codex", [
+      replayRecord("same", 1770000001000, {
+        modelId: "deepseek-chat",
+        providerId: undefined,
+      }),
+      replayRecord("same", 1770000001000, {
+        modelId: "mistral-large",
+        providerId: undefined,
+      }),
+      replayRecord("same", 1770000001000, {
+        modelId: "command-r-plus",
+        providerId: undefined,
+      }),
+    ]);
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.errors).toEqual([]);
+    expect(new Set(result.events.map((event) => event.dedupKey)).size).toBe(3);
+    expect(result.events.map((event) => event.providerId).sort()).toEqual([
+      "cohere",
+      "deepseek",
+      "mistral",
+    ]);
   });
 
   it("infers source from path segments instead of arbitrary substrings", async () => {
@@ -736,7 +804,11 @@ describe("collector-core fixtures", () => {
   });
 });
 
-function replayRecord(messageId: string, timestampMs: number) {
+function replayRecord(
+  messageId: string,
+  timestampMs: number,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     source: "codex",
     sourceSessionId: "replay-session",
@@ -746,6 +818,7 @@ function replayRecord(messageId: string, timestampMs: number) {
     timestampMs,
     workspacePath: "C:/Users/demo/replay",
     tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 1 },
+    ...overrides,
   };
 }
 
