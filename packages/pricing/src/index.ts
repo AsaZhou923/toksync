@@ -12,10 +12,13 @@ export interface ModelPricing {
 
 const SOURCES = {
   openaiPricing: "https://openai.com/api/pricing/",
+  openaiGpt51CodexMini:
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini",
   openaiGpt53Codex:
     "https://developers.openai.com/api/docs/models/gpt-5.3-codex",
   openaiCodexRateCard:
     "https://help-lb.openai.com/en/articles/20001106-codex-rate-card",
+  googleGeminiPricing: "https://ai.google.dev/gemini-api/docs/pricing",
   anthropicPricing: "https://platform.claude.com/docs/en/about-claude/pricing",
   deepseekPricing: "https://api-docs.deepseek.com/quick_start/pricing/",
   zaiPricing: "https://docs.z.ai/guides/overview/pricing",
@@ -53,7 +56,49 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWritePerMillion: 1.75,
     source: "OpenAI GPT-5.3-Codex model pricing",
     sourceUrl: SOURCES.openaiGpt53Codex,
-    note: `codex-auto-review is mapped here because the OpenAI Codex rate card says code review uses GPT-5.3-Codex: ${SOURCES.openaiCodexRateCard}`,
+  },
+  "gpt-5.1-codex-mini": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 2,
+    cacheReadPerMillion: 0.025,
+    cacheWritePerMillion: 0.25,
+    source: "OpenAI GPT-5.1-Codex-mini model pricing",
+    sourceUrl: SOURCES.openaiGpt51CodexMini,
+  },
+  "codex-auto-review": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 2,
+    cacheReadPerMillion: 0.025,
+    cacheWritePerMillion: 0.25,
+    source: "OpenAI GPT-5.1-Codex-mini model pricing",
+    sourceUrl: SOURCES.openaiGpt51CodexMini,
+    note: `codex-auto-review is a Codex synthetic model id observed in local usage logs; use the GPT-5.1-Codex-mini token rate instead of the GPT-5.3-Codex code-review credit card unless the source publishes a first-party codex-auto-review USD rate. Codex credit reference: ${SOURCES.openaiCodexRateCard}`,
+  },
+  "gemini-3.1-pro-preview": {
+    inputPerMillion: 2,
+    outputPerMillion: 12,
+    cacheReadPerMillion: 0.2,
+    cacheWritePerMillion: 2,
+    source: "Google Gemini Developer API pricing",
+    sourceUrl: SOURCES.googleGeminiPricing,
+    note: "Uses the Standard paid tier for prompts <= 200k tokens; larger prompts have higher rates that TokSync cannot infer from aggregate event data yet.",
+  },
+  "gemini-3-flash-preview": {
+    inputPerMillion: 0.5,
+    outputPerMillion: 3,
+    cacheReadPerMillion: 0.05,
+    cacheWritePerMillion: 0.5,
+    source: "Google Gemini Developer API pricing",
+    sourceUrl: SOURCES.googleGeminiPricing,
+  },
+  "gemini-2.5-pro": {
+    inputPerMillion: 1.25,
+    outputPerMillion: 10,
+    cacheReadPerMillion: 0.125,
+    cacheWritePerMillion: 1.25,
+    source: "Google Gemini Developer API pricing",
+    sourceUrl: SOURCES.googleGeminiPricing,
+    note: "Uses the Standard paid tier for prompts <= 200k tokens; larger prompts have higher rates that TokSync cannot infer from aggregate event data yet.",
   },
   "claude-sonnet-4.6": {
     inputPerMillion: 3,
@@ -92,10 +137,12 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
 };
 
 const MODEL_ALIASES: Record<string, string> = {
-  "codex-auto-review": "gpt-5.3-codex",
   "gpt-5.3-codex-spark": "gpt-5.3-codex",
+  "gpt-5.1-codex-mini-latest": "gpt-5.1-codex-mini",
   "gpt-5.4 mini": "gpt-5.4-mini",
   "gpt-5.4-mini": "gpt-5.4-mini",
+  "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",
+  "gemini-3-pro-preview": "gemini-3.1-pro-preview",
   "claude-sonnet-4-6": "claude-sonnet-4.6",
   "claude-4-6-sonnet": "claude-sonnet-4.6",
   "claude-sonnet-4.5": "claude-sonnet-4.6",

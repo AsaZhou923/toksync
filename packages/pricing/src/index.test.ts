@@ -27,7 +27,19 @@ describe("pricing helpers", () => {
   });
 
   it("prices provider aliases without charging unknown models by default", () => {
-    expect(pricingForModel("openai/gpt-5.3-codex")).toEqual(
+    expect(pricingForModel("openai/gpt-5.1-codex-mini")).toMatchObject({
+      inputPerMillion: 0.25,
+      outputPerMillion: 2,
+      cacheReadPerMillion: 0.025,
+      cacheWritePerMillion: 0.25,
+    });
+    expect(pricingForModel("codex-auto-review")).toMatchObject({
+      inputPerMillion: 0.25,
+      outputPerMillion: 2,
+      cacheReadPerMillion: 0.025,
+      cacheWritePerMillion: 0.25,
+    });
+    expect(pricingForModel("openai/gpt-5.3-codex")).not.toEqual(
       pricingForModel("codex-auto-review"),
     );
     expect(
@@ -39,6 +51,48 @@ describe("pricing helpers", () => {
         reasoning: 1_000_000,
       }),
     ).toBe(0);
+  });
+
+  it("prices observed Gemini models with cached input and output-priced reasoning", () => {
+    expect(
+      estimateCostUsd("gemini-3.1-pro-preview", {
+        input: 1_000_000,
+        output: 100_000,
+        cacheRead: 500_000,
+        cacheWrite: 10_000,
+        reasoning: 1_000,
+      }),
+    ).toBe(3.332);
+    expect(
+      estimateCostUsd("gemini-3-flash-preview", {
+        input: 1_000_000,
+        output: 100_000,
+        cacheRead: 500_000,
+        cacheWrite: 10_000,
+        reasoning: 1_000,
+      }),
+    ).toBe(0.833);
+    expect(
+      estimateCostUsd("gemini-2.5-pro", {
+        input: 1_000_000,
+        output: 100_000,
+        cacheRead: 500_000,
+        cacheWrite: 10_000,
+        reasoning: 1_000,
+      }),
+    ).toBe(2.335);
+  });
+
+  it("uses the low-cost Codex mini rate for codex-auto-review logs", () => {
+    expect(
+      estimateCostUsd("codex-auto-review", {
+        input: 1_000_000,
+        output: 100_000,
+        cacheRead: 500_000,
+        cacheWrite: 10_000,
+        reasoning: 1_000,
+      }),
+    ).toBe(0.467);
   });
 
   it("uses official cache-hit pricing for DeepSeek and Z.AI models", () => {

@@ -133,7 +133,7 @@ describe("collector-core fixtures", () => {
     expect(result.events[0]).toMatchObject({
       source: "codex",
       sourceSessionId: "codex-real-session",
-      sourceMessageId: "2026-02-03T00:01:00.000Z",
+      sourceMessageId: expect.stringMatching(/^token-count:/),
       modelId: "gpt-5.4",
       providerId: "openai",
       timestampMs: 1770076860000,
@@ -150,6 +150,67 @@ describe("collector-core fixtures", () => {
     expect(result.events[0]?.workspaceKeyHash).toMatch(/^sha256:/);
     expect(serialized).not.toContain("SECRET_PROMPT_SHOULD_NOT_UPLOAD");
     expect(serialized).not.toContain("private-client");
+  });
+
+  it("deduplicates repeated Codex token_count echoes by usage content", async () => {
+    const tokenCount = {
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            output_tokens: 30,
+            cached_input_tokens: 20,
+            reasoning_output_tokens: 5,
+            total_tokens: 130,
+          },
+          last_token_usage: {
+            input_tokens: 100,
+            output_tokens: 30,
+            cached_input_tokens: 20,
+            reasoning_output_tokens: 5,
+            total_tokens: 130,
+          },
+        },
+        rate_limits: {
+          limit_id: "codex",
+        },
+      },
+    };
+    const fixture = writeFixture("codex", [
+      {
+        timestamp: "2026-02-03T00:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: "codex-echo-session",
+          cwd: "C:/Users/demo/project",
+          model: "gpt-5.4",
+          model_provider: "openai",
+        },
+      },
+      {
+        ...tokenCount,
+        timestamp: "2026-02-03T00:01:00.000Z",
+      },
+      {
+        ...tokenCount,
+        timestamp: "2026-02-03T00:01:05.000Z",
+        payload: {
+          ...tokenCount.payload,
+          rate_limits: {
+            limit_id: "codex_bengalfox",
+          },
+        },
+      },
+    ]);
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.errors).toEqual([]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.sourceMessageId).toMatch(/^token-count:/);
+    expect(summarizeEvents(result.events).tokens).toBe(135);
   });
 
   it("clamps Codex cache reads to input before subtracting inclusive cache tokens", async () => {

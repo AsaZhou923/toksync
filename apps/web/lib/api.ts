@@ -57,6 +57,11 @@ export interface UsageDailyResponse {
   days: UsageDailyDay[];
 }
 
+export interface DashboardOverview {
+  summary: DashboardSummary;
+  daily: UsageDailyResponse;
+}
+
 export interface SyncRun {
   id: string;
   clientRunId: string;

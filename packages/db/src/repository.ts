@@ -765,25 +765,10 @@ export class TokSyncRepository {
     const user = this.userByName(data, username);
     if (!user) return null;
     const events = this.filterEvents(data, user.id, filters);
-    const totals = sumEvents(events);
-    return {
-      totals: {
-        tokens: totals.tokens,
-        costUsd: round(totals.costUsd),
-        activeDays: new Set(events.map((event) => event.localDate)).size,
-        messages: totals.messages,
-        turns: events.filter((event) => event.isTurnStart).length,
-      },
-      topSources: breakdown(events, "source"),
-      topModels: breakdown(events, "modelId"),
-      topDevices: breakdown(events, "deviceId"),
-      topWorkspaces: breakdown(events, "workspaceLabel"),
-      lastSyncAt: latest(
-        data.syncRuns
-          .filter((run) => run.userId === user.id)
-          .map((run) => run.finishedAt || run.startedAt),
-      ),
-    };
+    return dashboardSummaryFromEvents(
+      events,
+      data.syncRuns.filter((run) => run.userId === user.id),
+    );
   }
 
   usageDaily(username = "demo", filters: DashboardFilters = {}) {
@@ -791,35 +776,18 @@ export class TokSyncRepository {
     const user = this.userByName(data, username);
     if (!user) return null;
     const events = this.filterEvents(data, user.id, filters);
-    const byDate = new Map<string, StoredUsageEvent[]>();
-    for (const event of events) {
-      byDate.set(event.localDate, [
-        ...(byDate.get(event.localDate) ?? []),
-        event,
-      ]);
-    }
+    return usageDailyFromEvents(events);
+  }
+
+  dashboardOverview(username = "demo", filters: DashboardFilters = {}) {
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return null;
+    const events = this.filterEvents(data, user.id, filters);
+    const syncRuns = data.syncRuns.filter((run) => run.userId === user.id);
     return {
-      days: [...byDate.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, items]) => {
-          const totals = sumEvents(items);
-          const sourceBreakdown: Record<
-            string,
-            { tokens: number; costUsd: number }
-          > = {};
-          for (const row of breakdown(items, "source")) {
-            sourceBreakdown[row.key] = {
-              tokens: row.tokens,
-              costUsd: row.costUsd,
-            };
-          }
-          return {
-            date,
-            tokens: totals.tokens,
-            costUsd: round(totals.costUsd),
-            sourceBreakdown,
-          };
-        }),
+      summary: dashboardSummaryFromEvents(events, syncRuns),
+      daily: usageDailyFromEvents(events),
     };
   }
 
@@ -2879,30 +2847,127 @@ function usageDailyView(events: StoredUsageEvent[]) {
   };
 }
 
-function sumEvents(events: StoredUsageEvent[]) {
-  const breakdownTotals = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoning: 0,
+interface EventTotals {
+  breakdown: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    reasoning: number;
   };
-  let costUsd = 0;
-  let messages = 0;
-  for (const event of events) {
-    breakdownTotals.input += event.tokens.input;
-    breakdownTotals.output += event.tokens.output;
-    breakdownTotals.cacheRead += event.tokens.cacheRead;
-    breakdownTotals.cacheWrite += event.tokens.cacheWrite;
-    breakdownTotals.reasoning += event.tokens.reasoning;
-    costUsd += event.costUsd ?? 0;
-    messages += event.messageCount;
-  }
+  costUsd: number;
+  messages: number;
+  turns: number;
+}
+
+function createEventTotals(): EventTotals {
   return {
-    tokens: totalTokens(breakdownTotals),
-    breakdown: breakdownTotals,
-    costUsd,
-    messages,
+    breakdown: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+    },
+    costUsd: 0,
+    messages: 0,
+    turns: 0,
+  };
+}
+
+function addEventTotals(totals: EventTotals, event: StoredUsageEvent) {
+  totals.breakdown.input += event.tokens.input;
+  totals.breakdown.output += event.tokens.output;
+  totals.breakdown.cacheRead += event.tokens.cacheRead;
+  totals.breakdown.cacheWrite += event.tokens.cacheWrite;
+  totals.breakdown.reasoning += event.tokens.reasoning;
+  totals.costUsd += event.costUsd ?? 0;
+  totals.messages += event.messageCount;
+  if (event.isTurnStart) totals.turns += 1;
+}
+
+function sumEvents(events: StoredUsageEvent[]) {
+  const totals = createEventTotals();
+  for (const event of events) addEventTotals(totals, event);
+  return eventTotalsView(totals);
+}
+
+function eventTotalsView(totals: EventTotals) {
+  return {
+    tokens: totalTokens(totals.breakdown),
+    breakdown: totals.breakdown,
+    costUsd: totals.costUsd,
+    messages: totals.messages,
+    turns: totals.turns,
+  };
+}
+
+function dashboardSummaryFromEvents(
+  events: StoredUsageEvent[],
+  syncRuns: SyncRunRecord[],
+) {
+  const totals = sumEvents(events);
+  const activeDays = new Set<string>();
+  for (const event of events) activeDays.add(event.localDate);
+  return {
+    totals: {
+      tokens: totals.tokens,
+      costUsd: round(totals.costUsd),
+      activeDays: activeDays.size,
+      messages: totals.messages,
+      turns: totals.turns,
+    },
+    topSources: breakdown(events, "source"),
+    topModels: breakdown(events, "modelId"),
+    topDevices: breakdown(events, "deviceId"),
+    topWorkspaces: breakdown(events, "workspaceLabel"),
+    lastSyncAt: latest(syncRuns.map((run) => run.finishedAt || run.startedAt)),
+  };
+}
+
+function usageDailyFromEvents(events: StoredUsageEvent[]) {
+  const byDate = new Map<
+    string,
+    {
+      totals: EventTotals;
+      sources: Map<string, EventTotals>;
+    }
+  >();
+  for (const event of events) {
+    const day = byDate.get(event.localDate) ?? {
+      totals: createEventTotals(),
+      sources: new Map<string, EventTotals>(),
+    };
+    addEventTotals(day.totals, event);
+    const sourceTotals = day.sources.get(event.source) ?? createEventTotals();
+    addEventTotals(sourceTotals, event);
+    day.sources.set(event.source, sourceTotals);
+    byDate.set(event.localDate, day);
+  }
+
+  return {
+    days: [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, day]) => {
+        const totals = eventTotalsView(day.totals);
+        const sourceBreakdown: Record<
+          string,
+          { tokens: number; costUsd: number }
+        > = {};
+        for (const [source, sourceTotals] of day.sources) {
+          const view = eventTotalsView(sourceTotals);
+          sourceBreakdown[source] = {
+            tokens: view.tokens,
+            costUsd: round(view.costUsd),
+          };
+        }
+        return {
+          date,
+          tokens: totals.tokens,
+          costUsd: round(totals.costUsd),
+          sourceBreakdown,
+        };
+      }),
   };
 }
 
@@ -2910,19 +2975,21 @@ function breakdown(
   events: StoredUsageEvent[],
   key: "source" | "modelId" | "deviceId" | "workspaceLabel",
 ): BreakdownRow[] {
-  const rows = new Map<string, StoredUsageEvent[]>();
+  const rows = new Map<string, EventTotals>();
   for (const event of events) {
     const value = event[key] || "unknown";
-    rows.set(value, [...(rows.get(value) ?? []), event]);
+    const totals = rows.get(value) ?? createEventTotals();
+    addEventTotals(totals, event);
+    rows.set(value, totals);
   }
   return [...rows.entries()]
-    .map(([rowKey, rowEvents]) => {
-      const totals = sumEvents(rowEvents);
+    .map(([rowKey, totals]) => {
+      const view = eventTotalsView(totals);
       return {
         key: rowKey,
-        tokens: totals.tokens,
-        costUsd: round(totals.costUsd),
-        messages: totals.messages,
+        tokens: view.tokens,
+        costUsd: round(view.costUsd),
+        messages: view.messages,
       };
     })
     .sort((a, b) => b.tokens - a.tokens)

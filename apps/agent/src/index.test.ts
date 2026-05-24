@@ -3,6 +3,7 @@ import { deviceFingerprint, type AgentConfig } from "./config";
 import {
   buildLocalReceipt,
   chunk,
+  chunkForUpload,
   resolveWriteToken,
   summarizeSyncResponses,
 } from "./index";
@@ -49,6 +50,18 @@ describe("agent CLI helpers", () => {
 
   it("chunks uploads and summarizes multi-batch responses", () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    const payload = (events: string[]) => ({ schemaVersion: 1, events });
+    const firstTwoBytes = Buffer.byteLength(
+      JSON.stringify(payload(["a", "b"])),
+      "utf8",
+    );
+    expect(chunkForUpload(["a", "b", "c"], 10, firstTwoBytes, payload)).toEqual(
+      [["a", "b"], ["c"]],
+    );
+    expect(() => chunkForUpload(["x".repeat(100)], 10, 10, payload)).toThrow(
+      /Single usage event/,
+    );
+
     expect(
       summarizeSyncResponses([
         { status: "accepted", inserted: 2, updated: 1, skipped: 0 },

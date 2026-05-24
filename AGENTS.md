@@ -209,6 +209,7 @@ Current important routes include:
 - `GET /v1/sync/state`
 - `POST /v1/sync/usage-batch`
 - `POST /v1/sync/content-batch`
+- `GET /v1/dashboard/overview`
 - `GET /v1/dashboard/summary`
 - `GET /v1/dashboard/usage-daily`
 - `GET /v1/dashboard/breakdowns`

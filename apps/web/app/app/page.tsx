@@ -18,11 +18,10 @@ import {
   ApiRequestError,
   apiGet,
   type CostGuardrailsResponse,
-  type DashboardSummary,
+  type DashboardOverview,
   type PublicProfileState,
   type SyncRunsResponse,
   type UsageDailyDay,
-  type UsageDailyResponse,
 } from "../../lib/api";
 import {
   buildMergeCopilot,
@@ -40,21 +39,16 @@ import { SourceHealthRadar } from "../../components/SourceHealthRadar";
 export const dynamic = "force-dynamic";
 
 export default async function AppDashboardPage() {
-  const [
-    summary,
-    daily,
-    syncRuns,
-    publicProfile,
-    guardrailsResult,
-    vaultResult,
-  ] = await Promise.all([
-    apiGet<DashboardSummary>("/v1/dashboard/summary"),
-    apiGet<UsageDailyResponse>("/v1/dashboard/usage-daily"),
-    apiGet<SyncRunsResponse>("/v1/sync-runs"),
-    apiGet<PublicProfileState>("/v1/public-profile"),
-    loadGuardrailsOverview(),
-    loadVaultOverview(),
-  ]);
+  const [dashboard, syncRuns, publicProfile, guardrailsResult, vaultResult] =
+    await Promise.all([
+      apiGet<DashboardOverview>("/v1/dashboard/overview"),
+      apiGet<SyncRunsResponse>("/v1/sync-runs"),
+      apiGet<PublicProfileState>("/v1/public-profile"),
+      loadGuardrailsOverview(),
+      loadVaultOverview(),
+    ]);
+  const summary = dashboard?.summary ?? null;
+  const daily = dashboard?.daily ?? null;
   const totals = summary?.totals ?? {
     tokens: 0,
     costUsd: 0,
@@ -75,7 +69,7 @@ export default async function AppDashboardPage() {
   const latestRunEvents = latestRun
     ? latestRun.insertedCount + latestRun.updatedCount + latestRun.skippedCount
     : 0;
-  const sourceRows = SOURCE_REGISTRY.map((source) => {
+  const sourceRows = SOURCE_REGISTRY.map((source, index) => {
     const row = summary?.topSources?.find((item) => item.key === source.id);
     return {
       id: source.id,
@@ -83,10 +77,19 @@ export default async function AppDashboardPage() {
       tokens: row?.tokens ?? 0,
       costUsd: row?.costUsd ?? 0,
       active: Boolean(row),
+      index,
     };
   });
+  const sortedSourceRows = [...sourceRows].sort(
+    (left, right) => right.tokens - left.tokens || left.index - right.index,
+  );
   const sourceMax = Math.max(1, ...sourceRows.map((row) => row.tokens));
   const dayMax = Math.max(1, ...days.map((day) => day.tokens));
+  const publicSurfaceDays = buildPublicSurfaceDays(days);
+  const publicSurfaceMax = Math.max(
+    1,
+    ...publicSurfaceDays.map((day) => day?.tokens ?? 0),
+  );
   const integrityRows = [
     {
       title: "latest sync",
@@ -216,6 +219,9 @@ export default async function AppDashboardPage() {
           ) : (
             <div
               className="usage-bars"
+              style={{
+                gridTemplateColumns: `repeat(${days.length}, minmax(2px, 1fr))`,
+              }}
               role="img"
               aria-label="Daily token totals"
             >
@@ -272,7 +278,7 @@ export default async function AppDashboardPage() {
         <div className="card">
           <h2 className="section-title">Source coverage</h2>
           <div className="source-grid">
-            {sourceRows.map((source) => (
+            {sortedSourceRows.map((source) => (
               <div className="source-item" key={source.id}>
                 <b>{source.name}</b>
                 <span className="bar-track">
@@ -316,8 +322,18 @@ export default async function AppDashboardPage() {
               </span>
             </div>
             <div className="proof-squares">
-              {Array.from({ length: 21 }).map((_, index) => (
-                <span key={index} />
+              {publicSurfaceDays.map((day, index) => (
+                <span
+                  data-level={
+                    day ? publicSurfaceLevel(day.tokens, publicSurfaceMax) : 0
+                  }
+                  key={day?.date ?? `empty-${index}`}
+                  title={
+                    day
+                      ? `${day.date}: ${formatCompactNumber(day.tokens)} tokens`
+                      : "no synced day"
+                  }
+                />
               ))}
             </div>
             <div className="toolbar" style={{ marginTop: 14 }}>
@@ -435,6 +451,23 @@ export default async function AppDashboardPage() {
       </section>
     </div>
   );
+}
+
+function buildPublicSurfaceDays(days: UsageDailyDay[]) {
+  const recent = days.slice(-21);
+  const emptySlots = Array.from<UsageDailyDay | null>({
+    length: Math.max(0, 21 - recent.length),
+  }).fill(null);
+  return [...emptySlots, ...recent];
+}
+
+function publicSurfaceLevel(tokens: number, maxTokens: number) {
+  if (tokens <= 0) return 0;
+  const ratio = tokens / maxTokens;
+  if (ratio >= 0.75) return 4;
+  if (ratio >= 0.5) return 3;
+  if (ratio >= 0.25) return 2;
+  return 1;
 }
 
 async function loadGuardrailsOverview(): Promise<{

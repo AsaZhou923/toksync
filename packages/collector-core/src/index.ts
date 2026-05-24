@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
 import { hashWorkspacePath, workspaceLabelFromPath } from "@toksync/privacy";
 import {
@@ -180,11 +181,28 @@ export async function collectUsageEvents(
     }
   }
 
-  events.sort(
+  const uniqueEvents = dedupeEventsByKey(events);
+  uniqueEvents.sort(
     (a, b) =>
       a.timestampMs - b.timestampMs || a.dedupKey.localeCompare(b.dedupKey),
   );
-  return { events, locations, errors };
+  return { events: uniqueEvents, locations, errors };
+}
+
+function dedupeEventsByKey(events: UsageEventV1[]) {
+  const byKey = new Map<string, UsageEventV1>();
+  const output: UsageEventV1[] = [];
+  for (const event of events) {
+    if (!event.sourceMessageId?.startsWith("token-count:")) {
+      output.push(event);
+      continue;
+    }
+    const current = byKey.get(event.dedupKey);
+    if (!current || event.timestampMs >= current.timestampMs) {
+      byKey.set(event.dedupKey, event);
+    }
+  }
+  return [...output, ...byKey.values()];
 }
 
 export function summarizeEvents(events: UsageEventV1[]) {
@@ -391,8 +409,10 @@ function normalizeRecord(
       record.uuid,
       payload?.id,
       payload?.turn_id,
-      record.timestamp,
-    ) ?? String(ctx.index + 1);
+    ) ??
+    codexTokenCountMessageId(record, ctx.source, modelId) ??
+    optionalString(record.timestamp) ??
+    String(ctx.index + 1);
   const workspacePath = optionalString(
     record.workspacePath,
     record.projectPath,
@@ -440,7 +460,9 @@ function normalizeRecord(
         source: ctx.source,
         sourceSessionId,
         sourceMessageId,
-        timestampMs,
+        timestampMs: sourceMessageId.startsWith("token-count:")
+          ? 0
+          : timestampMs,
         modelId,
       }),
     deviceId: ctx.deviceId,
@@ -540,6 +562,78 @@ function hasInclusiveCachedInput(tokens: Record<string, unknown>) {
       tokens.cache_read_input_tokens !== undefined) &&
     (tokens.input_tokens !== undefined || tokens.prompt_tokens !== undefined)
   );
+}
+
+function codexTokenCountMessageId(
+  record: Record<string, unknown>,
+  source: string,
+  modelId: string,
+) {
+  if (source !== "codex") return undefined;
+  const payload = recordValue(record.payload);
+  if (optionalString(payload?.type) !== "token_count") return undefined;
+  const payloadInfo = recordValue(payload?.info);
+  const lastUsage = recordValue(payloadInfo?.last_token_usage);
+  if (!lastUsage) return undefined;
+  const totalUsage = recordValue(payloadInfo?.total_token_usage);
+  const stableShape = {
+    modelId,
+    last: tokenUsageDedupShape(lastUsage),
+    total: totalUsage ? tokenUsageDedupShape(totalUsage) : undefined,
+  };
+  const digest = createHash("sha256")
+    .update(JSON.stringify(stableShape))
+    .digest("hex");
+  return `token-count:${digest}`;
+}
+
+function tokenUsageDedupShape(tokens: Record<string, unknown>) {
+  return {
+    input_tokens:
+      numberValue(
+        tokens.input,
+        tokens.inputTokens,
+        tokens.input_tokens,
+        tokens.prompt_tokens,
+        tokens.promptTokens,
+      ) ?? 0,
+    output_tokens:
+      numberValue(
+        tokens.output,
+        tokens.outputTokens,
+        tokens.output_tokens,
+        tokens.completion_tokens,
+        tokens.completionTokens,
+      ) ?? 0,
+    cached_input_tokens:
+      numberValue(
+        tokens.cacheRead,
+        tokens.cache_read,
+        tokens.cacheReadTokens,
+        tokens.cache_read_tokens,
+        tokens.cache_read_input_tokens,
+        tokens.cached_input_tokens,
+      ) ?? 0,
+    cache_write_tokens:
+      numberValue(
+        tokens.cacheWrite,
+        tokens.cache_write,
+        tokens.cacheWriteTokens,
+        tokens.cache_write_tokens,
+        tokens.cacheCreationTokens,
+        tokens.cache_creation_input_tokens,
+        cacheCreationTotal(tokens.cache_creation),
+      ) ?? 0,
+    reasoning_output_tokens:
+      numberValue(
+        tokens.reasoning,
+        tokens.reasoningTokens,
+        tokens.reasoning_tokens,
+        tokens.reasoning_output_tokens,
+      ) ?? 0,
+    total_tokens:
+      numberValue(tokens.total, tokens.totalTokens, tokens.total_tokens) ?? 0,
+  };
 }
 
 function updateFileState(

@@ -10,15 +10,11 @@ const LOCK_RETRY_MS = 25;
 export class FileTokSyncStore {
   private data: TokSyncData | null = null;
   private lastLoadedMtimeMs: number | null = null;
+  public readonly filePath: string;
 
-  constructor(
-    public readonly filePath = process.env.TOKSYNC_DB_FILE ||
-      path.resolve(
-        process.env.INIT_CWD || process.cwd(),
-        ".tmp",
-        "toksync-dev.json",
-      ),
-  ) {}
+  constructor(filePath = defaultTokSyncDbFilePath()) {
+    this.filePath = path.resolve(filePath);
+  }
 
   read(): TokSyncData {
     if (this.data && !this.hasExternalChange()) return this.data;
@@ -132,6 +128,18 @@ export class FileTokSyncStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+}
+
+export function defaultTokSyncDbFilePath() {
+  const configured = process.env.TOKSYNC_DB_FILE?.trim();
+  const baseDir =
+    process.env.TOKSYNC_DB_BASE_DIR || process.env.INIT_CWD || process.cwd();
+  if (configured) {
+    return path.isAbsolute(configured)
+      ? configured
+      : path.resolve(baseDir, configured);
+  }
+  return path.resolve(baseDir, ".tmp", "toksync-dev.json");
 }
 
 function sleepSync(ms: number) {

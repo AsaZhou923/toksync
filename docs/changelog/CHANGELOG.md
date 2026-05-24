@@ -2,6 +2,120 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-24-dashboard-upload-pricing-hardening"></a>
+
+## 2026-05-24 - dashboard upload pricing hardening
+
+日期：2026-05-24
+
+本次更新收口 dashboard 首屏性能、agent 上传上限、Codex token 计数去重、模型价格校准和本地 dev store 路径漂移问题。改动保持 metrics-only 边界不变：上传与公开输出仍只包含 usage metrics、公开聚合和低敏摘要，不打开内容同步、搜索、eval export 或 billing。
+
+## 概览
+
+- 新增 `/v1/dashboard/overview`，一次返回 summary 与 daily 聚合，Web dashboard 首屏不再重复读取两条私有 dashboard 聚合路径。
+- Agent sync 在 10,000 events 上限之外增加约 4 MB payload 预分片，避免触发 API 5 MB request body 限制。
+- Collector 为 Codex `token_count` 事件生成基于 usage content 的稳定 `token-count:*` message id，并去重重复 echo。
+- Pricing 更新 `gpt-5.1-codex-mini` / `codex-auto-review` 与 Gemini 3/2.5 估价映射；未知模型继续返回 0 成本，避免伪造成账单真值。
+- Web 的 activity、models、projects 明细页增加 query-driven 表头排序，dashboard 图表和 public proof squares 使用真实 usage 数据驱动。
+- API 启动入口向上查找 root `.env`，相对 `TOKSYNC_DB_FILE` 按 `.env` 所在目录解析，避免从 package cwd 启动时写错 store。
+
+## Agent / Collector
+
+- `chunkForUpload()` 先按完整 `UsageBatchV1` JSON byte size 检查分片，再上传；单个 event 超过 payload 上限时直接报错。
+- 多分片上传仍保留 `runId` 的 `n-of-total` 后缀，服务端 receipt / sync run 可解释每个 batch。
+- Codex `token_count` 缺少原始 message id 时，不再用 timestamp 作为稳定身份；相同 token usage echo 会汇总成一条事件，避免 totals 重复。
+- `packages/collector-core/src/index.test.ts` 增加重复 `token_count` echo 回归，并更新真实格式 fixture 的 message id 断言。
+
+## API / Storage
+
+- `TokSyncRepository.dashboardOverview()` 复用同一批 filtered events 构造 summary 与 daily view，减少 dashboard 首屏重复聚合。
+- summary、breakdown 和 daily aggregation 改成累加 totals，而不是为每个 group 反复分配 event 数组。
+- `FileTokSyncStore` 默认路径解析拆为 `defaultTokSyncDbFilePath()`，支持 `TOKSYNC_DB_BASE_DIR` 和 root `.env` 相对路径。
+- `apps/api/src/env.ts` 负责加载 root `.env` 并把相对 `TOKSYNC_DB_FILE` 解析成绝对路径。
+
+## Web / Embed
+
+- `/app` 改用 dashboard overview API，并按 usage 排序 source coverage。
+- Daily usage bars 使用稳定 grid tracks，避免数据天数变化时挤压布局。
+- Public proof squares 从 recent daily tokens 计算强度，不再用固定 nth-child 装饰色。
+- `/app/activity`、`/app/models`、`/app/projects` 增加可访问的 sortable table header。
+
+## Pricing / Cost
+
+- `gpt-5.1-codex-mini` 和 `codex-auto-review` 使用 Codex mini 费率估算。
+- `gemini-3.1-pro-preview`、`gemini-3-flash-preview`、`gemini-2.5-pro` 使用 Google Gemini paid tier 的 <=200k prompt 价估算。
+- `reasoning` 仍按 output 价估算，cache read/write 使用 provider 对应的 cached input / cache write 价。
+- Cost 继续是 approximate usage estimate，不作为 provider billing truth。
+
+## Privacy / Public Data
+
+- 新增 overview API 仍是私有 dashboard surface，需要 user session / dev auth / token auth。
+- Public proof squares 只使用 private dashboard 已聚合的 daily token totals，不读取或输出 private raw event identifiers。
+- Collector dedup hash 只基于模型和 token usage shape，不写入 prompt、assistant reply、tool payload、file content 或 raw path。
+- pricing 更新只改变估算表，不改变 sync payload schema 或公开数据边界。
+
+## 文档同步
+
+- `AGENTS.md` 补充 `/v1/dashboard/overview` 路由，后续代理不会遗漏当前 API surface。
+- 外部当前功能指南同步 agent 4 MB 分片、Codex `token_count` 去重、可排序明细页和 pricing 映射。
+- 外部 local-development spec 同步 root `.env` 解析、当前 root scripts、`check:boundaries` 和 seed 当前行为。
+- 外部 testing spec 同步 2026-05-24 回归测试清单、overview endpoint 和分片验收标准。
+- 外部文档变更清单记录本次 full gate / 文档契约修复。
+
+## 影响文件
+
+### Apps
+
+- `apps/agent/src/index.ts`
+- `apps/agent/src/index.test.ts`
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/api/src/env.ts`
+- `apps/api/src/env.test.ts`
+- `apps/api/src/index.ts`
+- `apps/web/app/app/page.tsx`
+- `apps/web/app/app/page.test.tsx`
+- `apps/web/app/app/activity/page.tsx`
+- `apps/web/app/app/models/page.tsx`
+- `apps/web/app/app/projects/page.tsx`
+- `apps/web/app/app/sortable-pages.test.tsx`
+- `apps/web/components/SortableTableHeader.tsx`
+- `apps/web/lib/api.ts`
+- `apps/web/lib/sort.ts`
+- `apps/web/app/globals.css`
+
+### Packages
+
+- `packages/collector-core/src/index.ts`
+- `packages/collector-core/src/index.test.ts`
+- `packages/db/src/repository.ts`
+- `packages/db/src/store.ts`
+- `packages/db/src/store.test.ts`
+- `packages/pricing/src/index.ts`
+- `packages/pricing/src/index.test.ts`
+
+### Docs
+
+- `AGENTS.md`
+- `docs/changelog/CHANGELOG.md`
+- External TokSync current feature guide
+- External TokSync local-development spec
+- External TokSync testing spec
+- External TokSync docs change list
+- External Update Logs mirror
+
+## 验证
+
+- 已通过：`pnpm exec prettier --check "E:/Project Code/docs/01 - Projects/TokSync/03 - Guides/当前功能与使用指南.md" "E:/Project Code/docs/01 - Projects/TokSync/00 - Specs/local-development.md" "E:/Project Code/docs/01 - Projects/TokSync/00 - Specs/testing.md" "E:/Project Code/docs/01 - Projects/TokSync/01 - Product/TokSync 文档变更清单.md"`
+- 已通过：`pnpm exec prettier --check AGENTS.md`
+- 已通过：`pnpm exec prettier --check docs/changelog/CHANGELOG.md docs/changelog/CHANGELOG_WORKFLOW.md "E:/Project Code/docs/01 - Projects/TokSync/09 - Changelog/Update Logs/CHANGELOG.md" "E:/Project Code/docs/01 - Projects/TokSync/09 - Changelog/Update Logs/CHANGELOG_WORKFLOW.md"`
+- 已通过：外部 Update Logs `CHANGELOG.md` / `CHANGELOG_WORKFLOW.md` 与仓库内版本 SHA256 一致。
+- 已通过：`git diff --check`
+- 已通过：`pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic`，输出 2 events / 2,640 tokens / receipt digest。
+- 已通过：`pnpm test:full`
+- 已通过：stale contract scan for old `codex-auto-review -> gpt-5.3-codex`, old root script examples, and obsolete testing heading returned no actionable drift.
+- 已通过：Playwright ports `3300` / `4300` had no owning process after test completion, only `TIME_WAIT`.
+
 <a id="2026-05-22-v0-5-hardening-follow-up"></a>
 
 ## 2026-05-22 - v0.5 hardening follow-up

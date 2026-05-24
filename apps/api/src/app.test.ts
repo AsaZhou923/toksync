@@ -449,6 +449,16 @@ describe("TokSync API", () => {
       }),
     );
     expect(summary.totals.tokens).toBe(157);
+    const overview = await json<{
+      summary: DashboardSummaryResponse;
+      daily: UsageDailyResponse;
+    }>(
+      await api.request("/v1/dashboard/overview", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    expect(overview.summary.totals.tokens).toBe(157);
+    expect(overview.daily.days).toHaveLength(1);
 
     await api.request("/v1/public-profile", {
       method: "POST",

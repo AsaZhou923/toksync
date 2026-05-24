@@ -297,6 +297,16 @@ export function createApiApp(options: ApiAppOptions = {}) {
     return c.json(summary);
   });
 
+  app.get("/v1/dashboard/overview", (c) => {
+    const username = authUsername(c);
+    const overview = repo.dashboardOverview(
+      username,
+      filtersFromUrl(c.req.url),
+    );
+    if (!overview) return c.json(apiError("not_found", "User not found"), 404);
+    return c.json(overview);
+  });
+
   app.get("/v1/dashboard/usage-daily", (c) => {
     const username = authUsername(c);
     const days = repo.usageDaily(username, filtersFromUrl(c.req.url));

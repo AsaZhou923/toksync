@@ -20,6 +20,9 @@ import {
 } from "./config";
 
 const AGENT_VERSION = "0.1.0";
+const AGENT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+const UPLOAD_SIZE_CHECK_RUN_ID =
+  "00000000-0000-4000-8000-000000000000-00000-of-00000";
 
 const program = new Command();
 program
@@ -210,7 +213,17 @@ program
     }
 
     const responses = [];
-    const chunks = chunk(result.events, USAGE_BATCH_MAX_EVENTS);
+    const chunks = chunkForUpload(
+      result.events,
+      USAGE_BATCH_MAX_EVENTS,
+      AGENT_UPLOAD_MAX_BYTES,
+      (events) => ({
+        ...batchBase,
+        runId: UPLOAD_SIZE_CHECK_RUN_ID,
+        mode: "sync",
+        events,
+      }),
+    );
     for (const [index, events] of chunks.entries()) {
       const response = await postJson(
         `${config.apiUrl}/v1/sync/usage-batch`,
@@ -282,6 +295,59 @@ export function chunk<T>(items: T[], size: number) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+export function chunkForUpload<T>(
+  items: T[],
+  maxItems: number,
+  maxBytes: number,
+  payloadForItems: (items: T[]) => unknown,
+) {
+  const chunks: T[][] = [];
+  let index = 0;
+  while (index < items.length) {
+    const maxEnd = Math.min(index + maxItems, items.length);
+    if (
+      payloadByteLength(payloadForItems(items.slice(index, maxEnd))) <= maxBytes
+    ) {
+      chunks.push(items.slice(index, maxEnd));
+      index = maxEnd;
+      continue;
+    }
+
+    let low = index + 1;
+    let high = maxEnd;
+    let bestEnd = index;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const bytes = payloadByteLength(payloadForItems(items.slice(index, mid)));
+      if (bytes <= maxBytes) {
+        bestEnd = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (bestEnd === index) {
+      throw new Error(
+        `Single usage event exceeds upload payload limit of ${formatBytes(maxBytes)}`,
+      );
+    }
+    chunks.push(items.slice(index, bestEnd));
+    index = bestEnd;
+  }
+  return chunks;
+}
+
+function payloadByteLength(payload: unknown) {
+  return Buffer.byteLength(JSON.stringify(payload), "utf8");
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
 }
 
 export function summarizeSyncResponses(responses: any[]) {

@@ -56,36 +56,16 @@ function responseForPath(pathname: string) {
     };
   }
   if (pathname === "/v1/dashboard/summary") {
+    return dashboardSummary();
+  }
+  if (pathname === "/v1/dashboard/overview") {
     return {
-      totals: {
-        tokens: 123456,
-        costUsd: 1.23,
-        activeDays: 2,
-        messages: 4,
-        turns: 3,
-      },
-      topSources: [
-        { key: "codex", tokens: 123456, costUsd: 1.23, messages: 4 },
-      ],
-      topModels: [
-        { key: "gpt-5.4", tokens: 123456, costUsd: 1.23, messages: 4 },
-      ],
-      topDevices: [],
-      topWorkspaces: [],
-      lastSyncAt: "2026-05-22T00:00:00.000Z",
+      summary: dashboardSummary(),
+      daily: dashboardDaily(),
     };
   }
   if (pathname === "/v1/dashboard/usage-daily") {
-    return {
-      days: [
-        {
-          date: "2026-05-22",
-          tokens: 123456,
-          costUsd: 1.23,
-          sourceBreakdown: { codex: { tokens: 123456, costUsd: 1.23 } },
-        },
-      ],
-    };
+    return dashboardDaily();
   }
   if (pathname === "/v1/sync-runs") {
     return {
@@ -212,4 +192,34 @@ function responseForPath(pathname: string) {
     };
   }
   return {};
+}
+
+function dashboardSummary() {
+  return {
+    totals: {
+      tokens: 123456,
+      costUsd: 1.23,
+      activeDays: 2,
+      messages: 4,
+      turns: 3,
+    },
+    topSources: [{ key: "codex", tokens: 123456, costUsd: 1.23, messages: 4 }],
+    topModels: [{ key: "gpt-5.4", tokens: 123456, costUsd: 1.23, messages: 4 }],
+    topDevices: [],
+    topWorkspaces: [],
+    lastSyncAt: "2026-05-22T00:00:00.000Z",
+  };
+}
+
+function dashboardDaily() {
+  return {
+    days: [
+      {
+        date: "2026-05-22",
+        tokens: 123456,
+        costUsd: 1.23,
+        sourceBreakdown: { codex: { tokens: 123456, costUsd: 1.23 } },
+      },
+    ],
+  };
 }
