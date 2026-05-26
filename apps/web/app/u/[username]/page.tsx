@@ -2,6 +2,7 @@ import { formatCompactNumber, formatUsd } from "@toksync/shared";
 import {
   apiGet,
   apiUrl,
+  optionalCurrentUsername,
   type BreakdownRow,
   type PublicProfileResponse,
 } from "../../../lib/api";
@@ -17,9 +18,12 @@ export default async function PublicProfilePage({
   const { username } = await params;
   const badge = apiUrl(`/v1/badge/${username}.svg?metric=tokens`);
   const card = apiUrl(`/v1/embed/${username}.svg?theme=light`);
+  const share = apiUrl(`/v1/share/${username}.svg?theme=dark`);
   const publicProfile = await apiGet<PublicProfileResponse>(
     `/v1/public-profile/${encodeURIComponent(username)}`,
   );
+  const viewerUsername = await optionalCurrentUsername();
+  const isOwner = viewerUsername?.toLowerCase() === username.toLowerCase();
   const stats = publicProfile?.profile;
   const graph = buildPublicGraph(stats);
   const totalTokens = Math.max(stats?.totalTokens ?? 0, 1);
@@ -114,12 +118,45 @@ export default async function PublicProfilePage({
           <div className="stack-list">
             <span>Badge endpoint: {badge}</span>
             <span>Card endpoint: {card}</span>
+            <span>Share image endpoint: {share}</span>
             <span>Only public aggregate cache is rendered here.</span>
           </div>
+          {isOwner ? (
+            <div className="toolbar">
+              <a className="btn" href="/app/settings">
+                Owner settings
+              </a>
+              <a className="btn" href="/app/embed">
+                README embeds
+              </a>
+            </div>
+          ) : null}
         </div>
       </section>
+      {stats ? (
+        <nav className="toolbar" aria-label="Public profile sections">
+          {stats.showSourceBreakdown ? (
+            <a className="segmented" href="#source-breakdown">
+              Sources
+            </a>
+          ) : null}
+          {stats.showModelBreakdown ? (
+            <a className="segmented" href="#model-breakdown">
+              Models
+            </a>
+          ) : null}
+          {stats.showWorkspaceBreakdown ? (
+            <a className="segmented" href="#workspace-breakdown">
+              Project labels
+            </a>
+          ) : null}
+          <a className="segmented" href="#share-assets">
+            Share assets
+          </a>
+        </nav>
+      ) : null}
       {stats?.showSourceBreakdown ? (
-        <section className="card">
+        <section className="card" id="source-breakdown">
           <h2 className="section-title">Public source mix</h2>
           <div className="source-grid">
             {(stats?.topSources ?? []).map((row: BreakdownRow) => (
@@ -143,7 +180,7 @@ export default async function PublicProfilePage({
         </section>
       ) : null}
       {stats?.showModelBreakdown ? (
-        <section className="card">
+        <section className="card" id="model-breakdown">
           <h2 className="section-title">Public model mix</h2>
           <div className="source-grid">
             {(stats?.topModels ?? []).map((row: BreakdownRow) => (
@@ -167,7 +204,7 @@ export default async function PublicProfilePage({
         </section>
       ) : null}
       {stats?.showWorkspaceBreakdown ? (
-        <section className="card">
+        <section className="card" id="workspace-breakdown">
           <h2 className="section-title">Public project labels</h2>
           <div className="source-grid">
             {(stats?.topWorkspaces ?? []).map((row: BreakdownRow) => (
@@ -191,14 +228,17 @@ export default async function PublicProfilePage({
         </section>
       ) : null}
       {publicProfile ? (
-        <>
+        <section className="grid grid-3" id="share-assets">
           <div className="svg-preview">
             <img src={badge} alt="TokSync badge" />
           </div>
           <div className="svg-preview">
             <img src={card} alt="TokSync profile card" />
           </div>
-        </>
+          <div className="svg-preview">
+            <img src={share} alt="TokSync public share image" />
+          </div>
+        </section>
       ) : null}
     </div>
   );

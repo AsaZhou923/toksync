@@ -6,6 +6,8 @@ import { KeyRound, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 export function ApiTokenCard({ username }: { username: string }) {
+  const [tokens, setTokens] = useState<ApiTokenMetadata[]>([]);
+  const [newToken, setNewToken] = useState<string | null>(null);
   const [status, setStatus] = useState<
     "idle" | "checking" | "available" | "unavailable" | "error"
   >("idle");
@@ -14,8 +16,9 @@ export function ApiTokenCard({ username }: { username: string }) {
   );
   const [tokenCount, setTokenCount] = useState(0);
 
-  async function refreshTokens() {
+  async function refreshTokens(options: RefreshTokenOptions = {}) {
     setStatus("checking");
+    if (options.clearCopyOnce ?? true) setNewToken(null);
     try {
       const response = await fetch(`${API_URL}/v1/settings/tokens`, {
         cache: "no-store",
@@ -23,8 +26,17 @@ export function ApiTokenCard({ username }: { username: string }) {
       });
 
       if (response.ok) {
-        const payload = await response.json();
-        setTokenCount(payload.tokens?.length ?? 0);
+        const payload = (await response.json()) as {
+          tokens?: ApiTokenMetadata[];
+        };
+        const nextTokens = payload.tokens ?? [];
+        setTokens(nextTokens);
+        setTokenCount(nextTokens.length);
+        setStatus("available");
+        setMessage(
+          options.message ??
+            "Token metadata refreshed. Secret text is only available immediately after creation.",
+        );
         return;
       }
 
@@ -58,12 +70,16 @@ export function ApiTokenCard({ username }: { username: string }) {
         },
       });
       if (!response.ok) throw new Error(String(response.status));
-      const payload = await response.json();
+      const payload = (await response.json()) as {
+        token?: string;
+        metadata?: ApiTokenMetadata;
+      };
       setStatus("available");
-      setMessage(
-        `Created token metadata ${payload.metadata?.id ?? "unknown"}. Secret text is intentionally not rendered here.`,
-      );
-      await refreshTokens();
+      setNewToken(payload.token ?? null);
+      await refreshTokens({
+        clearCopyOnce: false,
+        message: `Created token metadata ${payload.metadata?.id ?? "unknown"}. Copy the secret now; list refreshes will never return it again.`,
+      });
     } catch {
       setStatus("error");
       setMessage("Token creation failed.");
@@ -72,6 +88,7 @@ export function ApiTokenCard({ username }: { username: string }) {
 
   async function deleteSubmittedData() {
     setStatus("checking");
+    setNewToken(null);
     try {
       const response = await fetch(`${API_URL}/v1/settings/submitted-data`, {
         method: "DELETE",
@@ -85,6 +102,24 @@ export function ApiTokenCard({ username }: { username: string }) {
     } catch {
       setStatus("error");
       setMessage("Submitted-data deletion failed.");
+    }
+  }
+
+  async function revokeToken(tokenId: string) {
+    setStatus("checking");
+    setNewToken(null);
+    try {
+      const response = await fetch(`${API_URL}/v1/settings/tokens/${tokenId}`, {
+        method: "DELETE",
+        headers: { "X-TokSync-User": username },
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      setStatus("available");
+      setMessage("Token revoked. Existing private metrics are unchanged.");
+      await refreshTokens();
+    } catch {
+      setStatus("error");
+      setMessage("Token revoke failed.");
     }
   }
 
@@ -128,12 +163,38 @@ export function ApiTokenCard({ username }: { username: string }) {
       <p className="muted">
         {message} Active metadata rows: {tokenCount}
       </p>
+      {newToken ? (
+        <div className="notice-strip good">
+          <strong>Copy-once token:</strong> <code>{newToken}</code>
+        </div>
+      ) : null}
+      <div className="stack-list">
+        {tokens.length === 0 ? (
+          <span>No token metadata loaded yet.</span>
+        ) : (
+          tokens.map((token) => (
+            <span key={token.id}>
+              {token.name} / last used {token.lastUsedAt ?? "never"} /{" "}
+              {token.revokedAt ? "revoked" : "active"}{" "}
+              {!token.revokedAt ? (
+                <button
+                  className="link-button"
+                  type="button"
+                  onClick={() => revokeToken(token.id)}
+                >
+                  revoke
+                </button>
+              ) : null}
+            </span>
+          ))
+        )}
+      </div>
       <div className="toolbar">
         <button className="btn primary" type="button" onClick={createToken}>
           <KeyRound size={16} />
           Create metadata
         </button>
-        <button className="btn" type="button" onClick={refreshTokens}>
+        <button className="btn" type="button" onClick={() => refreshTokens()}>
           <RefreshCw size={16} />
           Refresh
         </button>
@@ -142,6 +203,26 @@ export function ApiTokenCard({ username }: { username: string }) {
           Clear public submitted data
         </button>
       </div>
+      <p className="muted">
+        Clearing public submitted data disables public profile and leaderboard
+        cache only. It does not delete private raw metrics, device data, or
+        vault exports.
+      </p>
     </div>
   );
+}
+
+interface ApiTokenMetadata {
+  id: string;
+  name: string;
+  scopes: string[];
+  lastUsedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+interface RefreshTokenOptions {
+  clearCopyOnce?: boolean;
+  message?: string;
 }

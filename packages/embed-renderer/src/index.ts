@@ -31,6 +31,11 @@ export interface CardOptions {
   metric?: "tokens" | "cost";
 }
 
+export interface ShareImageOptions {
+  theme?: "dark" | "light";
+  metric?: "tokens" | "cost";
+}
+
 function escapeXml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -126,6 +131,67 @@ export function renderProfileCardSvg(
     <text x="316" y="132" fill="${muted}" font-size="12">active days</text>
   </g>
   ${breakdown}
+</svg>`;
+}
+
+export function renderShareImageSvg(
+  stats: PublicEmbedStats | null,
+  options: ShareImageOptions = {},
+) {
+  const theme = options.theme ?? "dark";
+  const width = 1200;
+  const height = 630;
+  const bg = theme === "light" ? "#f7f5ee" : "#101711";
+  const panel = theme === "light" ? "#ffffff" : "#19221b";
+  const fg = theme === "light" ? "#101711" : "#f5f1e8";
+  const muted = theme === "light" ? "#667064" : "#a9b5a7";
+  const line = theme === "light" ? "#d7ddcf" : "#334035";
+  const accent = "#22c55e";
+
+  if (!stats) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" role="img" aria-label="TokSync public share unavailable">
+  <rect width="100%" height="100%" fill="${bg}"/>
+  <rect x="72" y="72" width="1056" height="486" rx="24" fill="${panel}" stroke="${line}"/>
+  <text x="116" y="156" fill="${fg}" font-size="46" font-weight="800" font-family="Inter,Arial,sans-serif">TokSync</text>
+  <text x="116" y="224" fill="${muted}" font-size="26" font-family="Inter,Arial,sans-serif">Public profile is private or not available.</text>
+</svg>`;
+  }
+
+  const title = escapeXml(stats.displayName || stats.username);
+  const metric = options.metric === "cost" ? "cost" : "tokens";
+  const metricValue =
+    metric === "cost"
+      ? stats.showCost
+        ? formatUsd(stats.totalCostUsd)
+        : "hidden"
+      : formatCompactNumber(stats.totalTokens);
+  const metricLabel = metric === "cost" ? "estimated cost" : "public tokens";
+  const topSource = stats.showSourceBreakdown
+    ? (stats.topSources[0]?.key ?? "no source")
+    : "hidden";
+  const topModel = stats.showModelBreakdown
+    ? (stats.topModels[0]?.key ?? "no model")
+    : "hidden";
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" role="img" aria-label="TokSync public share for ${escapeXml(stats.username)}">
+  <rect width="100%" height="100%" fill="${bg}"/>
+  <rect x="72" y="72" width="1056" height="486" rx="24" fill="${panel}" stroke="${line}"/>
+  <circle cx="130" cy="136" r="18" fill="${accent}"/>
+  <text x="164" y="149" fill="${fg}" font-size="32" font-weight="800" font-family="Inter,Arial,sans-serif">TokSync</text>
+  <text x="116" y="248" fill="${fg}" font-size="70" font-weight="850" font-family="Inter,Arial,sans-serif">${title}</text>
+  <text x="116" y="304" fill="${muted}" font-size="28" font-family="Inter,Arial,sans-serif">@${escapeXml(stats.username)} public AI coding metrics</text>
+  <text x="116" y="420" fill="${fg}" font-size="82" font-weight="850" font-family="Inter,Arial,sans-serif">${escapeXml(metricValue)}</text>
+  <text x="118" y="466" fill="${muted}" font-size="24" font-family="Inter,Arial,sans-serif">${metricLabel}. Estimates are not provider billing truth.</text>
+  <g font-family="Inter,Arial,sans-serif" font-size="22" fill="${muted}">
+    <text x="690" y="384">active days</text>
+    <text x="690" y="432">top source</text>
+    <text x="690" y="480">top model</text>
+  </g>
+  <g font-family="Inter,Arial,sans-serif" font-size="28" font-weight="700" fill="${fg}">
+    <text x="900" y="384">${stats.activeDays}</text>
+    <text x="900" y="432">${escapeXml(topSource)}</text>
+    <text x="900" y="480">${escapeXml(topModel)}</text>
+  </g>
 </svg>`;
 }
 

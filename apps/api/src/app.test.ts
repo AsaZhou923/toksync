@@ -459,6 +459,22 @@ describe("TokSync API", () => {
     );
     expect(overview.summary.totals.tokens).toBe(157);
     expect(overview.daily.days).toHaveLength(1);
+    const pricing = await json<any>(
+      await api.request("/v1/pricing/models", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
+    expect(pricing).toMatchObject({
+      estimatedNotBillingTruth: true,
+      unknownModelsDefaultCostUsd: 0,
+      models: [
+        {
+          modelId: "gpt-5.4",
+          canonicalModelId: "gpt-5.4",
+          known: true,
+        },
+      ],
+    });
 
     await api.request("/v1/public-profile", {
       method: "POST",
@@ -839,17 +855,20 @@ describe("TokSync API", () => {
       "/v1/badge/demo.svg?metric=cost&style=flat-square&label=Tokens&color=22c55e",
     );
     const card = await api.request("/v1/embed/demo.svg?theme=light&compact=1");
+    const share = await api.request("/v1/share/demo.svg?theme=light");
     const publicProfile = await json<any>(
       await api.request("/v1/public-profile/demo"),
     );
-    const svg = `${await badge.text()}${await card.text()}`;
+    const svg = `${await badge.text()}${await card.text()}${await share.text()}`;
 
     expect(badge.status).toBe(200);
     expect(card.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(share.headers.get("content-type")).toContain("image/svg+xml");
     expect(publicProfile.profile.totalTokens).toBe(314);
     expect(publicProfile.profile.showWorkspaceBreakdown).toBe(false);
     expect(publicProfile.profile.topWorkspaces).toEqual([]);
     expect(svg).toContain("$0.0200");
+    expect(svg).toContain("public AI coding metrics");
     expect(svg).not.toContain("<script");
     expect(svg).not.toContain(secretPath);
     expect(svg).not.toContain("sha256:private");
@@ -1144,6 +1163,15 @@ describe("TokSync API", () => {
     const weeklyLeaderboard = await json<any>(
       await api.request("/v1/leaderboard?metric=tokens&period=weekly"),
     );
+    const costLeaderboard = await json<any>(
+      await api.request("/v1/leaderboard?metric=cost&period=all_time"),
+    );
+    const searchedLeaderboard = await json<any>(
+      await api.request("/v1/leaderboard?search=ali"),
+    );
+    const currentRankLeaderboard = await json<any>(
+      await api.request("/v1/leaderboard?currentUser=alice"),
+    );
     const sourceLeaderboard = await api.request("/v1/leaderboard?source=codex");
     const modelLeaderboard = await api.request("/v1/leaderboard?model=gpt-5.4");
     const serialized = JSON.stringify(leaderboard);
@@ -1163,6 +1191,18 @@ describe("TokSync API", () => {
       username: "alice",
       totalTokens: 1157,
       metricValue: 157,
+    });
+    expect(costLeaderboard.rows[0]).toMatchObject({
+      username: "alice",
+      totalCostUsd: 0.21,
+      metricValue: 0.21,
+    });
+    expect(searchedLeaderboard.rows.map((row: any) => row.username)).toEqual([
+      "alice",
+    ]);
+    expect(currentRankLeaderboard.currentUserRank).toMatchObject({
+      rank: 1,
+      username: "alice",
     });
     expect(sourceLeaderboard.status).toBe(400);
     expect(modelLeaderboard.status).toBe(400);

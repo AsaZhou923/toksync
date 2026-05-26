@@ -11,9 +11,11 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   renderBadgeSvg,
   renderProfileCardSvg,
+  renderShareImageSvg,
   type BadgeOptions,
   type PublicEmbedStats,
 } from "@toksync/embed-renderer";
+import { auditModelPricing } from "@toksync/pricing";
 import {
   CostGuardrailTargetError,
   TokSyncRepository,
@@ -86,6 +88,7 @@ const AUTH_REQUIRED_ROUTES = [
   "/v1/sync/receipts",
   "/v1/sync/receipts/*",
   "/v1/source-health",
+  "/v1/pricing/*",
   "/v1/cost-guardrails",
   "/v1/merge/*",
   "/v1/exports",
@@ -323,6 +326,23 @@ export function createApiApp(options: ApiAppOptions = {}) {
       models: summary.topModels,
       devices: summary.topDevices,
       workspaces: summary.topWorkspaces,
+    });
+  });
+
+  app.get("/v1/pricing/models", (c) => {
+    const username = authUsername(c);
+    const summary = repo.dashboardSummary(username, filtersFromUrl(c.req.url));
+    if (!summary) return c.json(apiError("not_found", "User not found"), 404);
+    return c.json({
+      estimatedNotBillingTruth: true,
+      unknownModelsDefaultCostUsd: 0,
+      models: auditModelPricing(
+        summary.topModels.map((row) => ({
+          modelId: row.key,
+          tokens: row.tokens,
+          costUsd: row.costUsd,
+        })),
+      ),
     });
   });
 
@@ -622,6 +642,18 @@ export function createApiApp(options: ApiAppOptions = {}) {
     return svgResponse(svg, isValidUsername(username) ? 200 : 400);
   });
 
+  app.get("/v1/share/:username", (c) => {
+    const username = (c.req.param("username") ?? "").replace(/\.svg$/, "");
+    const svg = renderShareImageSvg(
+      publicStatsToEmbed(repo.getPublicStats(username), username),
+      {
+        theme: c.req.query("theme") === "light" ? "light" : "dark",
+        metric: c.req.query("metric") === "cost" ? "cost" : "tokens",
+      },
+    );
+    return svgResponse(svg, isValidUsername(username) ? 200 : 400);
+  });
+
   app.get("/v1/leaderboard", (c) => {
     const unsupported = unsupportedLeaderboardParam(c.req.url);
     if (unsupported) {
@@ -634,11 +666,15 @@ export function createApiApp(options: ApiAppOptions = {}) {
       );
     }
     const limit = parsePositiveInt(c.req.query("limit"));
+    const search = c.req.query("search")?.trim();
+    const currentUsername = parseOptionalUsername(c.req.query("currentUser"));
     return c.json(
       repo.listLeaderboard({
         metric: parseLeaderboardMetric(c.req.query("metric")),
         period: parseLeaderboardPeriod(c.req.query("period")),
         ...(limit ? { limit } : {}),
+        ...(search ? { search } : {}),
+        ...(currentUsername ? { currentUsername } : {}),
       }),
     );
   });
@@ -1111,6 +1147,7 @@ function parseMetric(value: string | undefined): "tokens" | "cost" | "rank" {
 
 function parseLeaderboardMetric(value: string | undefined) {
   if (
+    value === "cost" ||
     value === "active_days" ||
     value === "streak" ||
     value === "monthly_tokens"
@@ -1118,6 +1155,11 @@ function parseLeaderboardMetric(value: string | undefined) {
     return value;
   }
   return "tokens" as const;
+}
+
+function parseOptionalUsername(value: string | undefined) {
+  if (!value) return undefined;
+  return isValidUsername(value) ? normalizeUsername(value) : undefined;
 }
 
 function parseLeaderboardPeriod(value: string | undefined) {

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiTokenCard } from "./ApiTokenCard";
 import { CostGuardrailsConsole } from "./CostGuardrailsConsole";
 import { LeaderboardConsole } from "./LeaderboardConsole";
+import { PublicEmbedPanel } from "./PublicEmbedPanel";
 import type {
   CostGuardrailsResponse,
   LeaderboardRow,
@@ -69,6 +70,7 @@ describe("console client components", () => {
         username: "demo",
         displayName: "Demo User",
         tokens: 123456,
+        totalCostUsd: 12.34,
         activeDays: 12,
         streak: 3,
         monthlyTokens: 45678,
@@ -80,6 +82,7 @@ describe("console client components", () => {
         username="demo"
         publicProfile={publicProfile}
         initialRows={rows}
+        initialCurrentUserRank={rows[0]!}
         initialMetric="tokens"
         initialPeriod="all_time"
         initialAvailable={true}
@@ -89,6 +92,8 @@ describe("console client components", () => {
 
     expect(html).toContain("Participation gate");
     expect(html).toContain("public rank on");
+    expect(html).toContain("Current rank");
+    expect(html).toContain("#1");
     expect(html).toContain("Demo User");
     expect(html).toContain("Public ranks");
   });
@@ -101,5 +106,31 @@ describe("console client components", () => {
     expect(html).toContain("Never echo the secret");
     expect(html).not.toContain("tsu_");
     expect(html).not.toContain("tsk_");
+  });
+
+  it("renders README badge, card and share snippets from public settings", () => {
+    const profile: PublicProfileState = {
+      enabled: true,
+      showCost: false,
+      showSourceBreakdown: true,
+      showModelBreakdown: true,
+      showWorkspaceBreakdown: false,
+      leaderboardOptIn: false,
+    };
+
+    const html = renderToStaticMarkup(
+      <PublicEmbedPanel
+        username="demo"
+        initial={profile}
+        profileUrl="/u/demo"
+        apiBaseUrl="http://localhost:4000"
+        apiReady={true}
+      />,
+    );
+
+    expect(html).toContain("/v1/badge/demo.svg");
+    expect(html).toContain("/v1/embed/demo.svg");
+    expect(html).toContain("/v1/share/demo.svg");
+    expect(html).not.toContain("workspaceKeyHash");
   });
 });

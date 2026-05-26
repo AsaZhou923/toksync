@@ -9,7 +9,12 @@ import {
   discoverSources,
   summarizeEvents,
 } from "@toksync/collector-core";
-import { formatUsd, USAGE_BATCH_MAX_EVENTS } from "@toksync/shared";
+import {
+  formatUsd,
+  totalTokens,
+  USAGE_BATCH_MAX_EVENTS,
+  type UsageEventV1,
+} from "@toksync/shared";
 import { assertMetricsOnlyPayload, sha256Base64Url } from "@toksync/privacy";
 import {
   clearAuth,
@@ -143,6 +148,36 @@ sources
       console.log(
         `${location.source.padEnd(8)} ${status.padEnd(12)} ${location.path}`,
       );
+    }
+  });
+
+program
+  .command("report")
+  .description("Generate local metrics-only usage reports")
+  .argument("[view]", "models, sources, daily, monthly, or hourly", "models")
+  .option("--fixture <path>", "Read synthetic fixture directory or file")
+  .option("--source <source...>", "Restrict to one or more sources")
+  .option("--format <format>", "Output format: table or json", "table")
+  .action(async (view, options) => {
+    const kind = parseReportKind(view);
+    const format = parseReportFormat(options.format);
+    const config = loadConfig();
+    const collectOptions = {
+      deviceId: config.deviceId || "report-device",
+      sources: options.source,
+    } as Parameters<typeof collectUsageEvents>[0];
+    if (options.fixture) {
+      collectOptions.fixture = path.resolve(
+        process.env.INIT_CWD || process.cwd(),
+        options.fixture,
+      );
+    }
+
+    const result = await collectUsageEvents(collectOptions);
+    const report = buildUsageReport(result.events, kind);
+    console.log(formatUsageReport(report, format));
+    if (result.errors.length > 0) {
+      console.error(`Warnings: ${JSON.stringify(result.errors, null, 2)}`);
     }
   });
 
@@ -427,6 +462,134 @@ export function resolveWriteToken(configToken?: string) {
     "Using TOKSYNC_API_TOKEN for this sync only; it has been cleared from the current process environment.",
   );
   return envToken;
+}
+
+export type UsageReportKind =
+  | "models"
+  | "sources"
+  | "daily"
+  | "monthly"
+  | "hourly";
+export type UsageReportFormat = "table" | "json";
+
+export interface UsageReportRow {
+  key: string;
+  tokens: number;
+  costUsd: number;
+  events: number;
+  messages: number;
+  turns: number;
+}
+
+export interface UsageReport {
+  schemaVersion: 1;
+  kind: UsageReportKind;
+  generatedAt: string;
+  rows: UsageReportRow[];
+}
+
+export function buildUsageReport(
+  events: UsageEventV1[],
+  kind: UsageReportKind,
+  generatedAt = new Date().toISOString(),
+): UsageReport {
+  const rows = new Map<string, UsageReportRow>();
+  for (const event of events) {
+    const key = reportKey(event, kind);
+    const row =
+      rows.get(key) ??
+      ({
+        key,
+        tokens: 0,
+        costUsd: 0,
+        events: 0,
+        messages: 0,
+        turns: 0,
+      } satisfies UsageReportRow);
+    row.tokens += totalTokens(event.tokens);
+    row.costUsd += event.costUsd ?? 0;
+    row.events += 1;
+    row.messages += event.messageCount ?? 0;
+    row.turns += event.isTurnStart ? 1 : 0;
+    rows.set(key, row);
+  }
+
+  return {
+    schemaVersion: 1,
+    kind,
+    generatedAt,
+    rows: [...rows.values()]
+      .map((row) => ({
+        ...row,
+        costUsd: roundUsd(row.costUsd),
+      }))
+      .sort((a, b) => b.tokens - a.tokens || a.key.localeCompare(b.key)),
+  };
+}
+
+export function formatUsageReport(
+  report: UsageReport,
+  format: UsageReportFormat,
+) {
+  if (format === "json") return JSON.stringify(report, null, 2);
+  const header = ["key", "tokens", "cost", "events", "messages", "turns"];
+  const rows = [
+    header,
+    ...report.rows.map((row) => [
+      row.key,
+      String(row.tokens),
+      formatUsd(row.costUsd),
+      String(row.events),
+      String(row.messages),
+      String(row.turns),
+    ]),
+  ];
+  const widths = header.map((_, column) =>
+    Math.max(...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  return [
+    `TokSync ${report.kind} report`,
+    rows
+      .map((row) =>
+        row
+          .map((cell, column) => cell.padEnd(widths[column] ?? cell.length))
+          .join("  ")
+          .trimEnd(),
+      )
+      .join("\n"),
+  ].join("\n");
+}
+
+export function parseReportKind(value: string): UsageReportKind {
+  if (
+    value === "models" ||
+    value === "sources" ||
+    value === "daily" ||
+    value === "monthly" ||
+    value === "hourly"
+  ) {
+    return value;
+  }
+  throw new Error(
+    `Unknown report view "${value}". Use models, sources, daily, monthly, or hourly.`,
+  );
+}
+
+export function parseReportFormat(value: string): UsageReportFormat {
+  if (value === "table" || value === "json") return value;
+  throw new Error(`Unknown report format "${value}". Use table or json.`);
+}
+
+function reportKey(event: UsageEventV1, kind: UsageReportKind) {
+  if (kind === "models") return event.modelId;
+  if (kind === "sources") return event.source;
+  if (kind === "daily") return event.localDate;
+  if (kind === "monthly") return event.localDate.slice(0, 7);
+  return `${new Date(event.timestampMs).toISOString().slice(0, 13)}:00Z`;
+}
+
+function roundUsd(value: number) {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function isMainModule() {

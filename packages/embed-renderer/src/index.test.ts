@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   renderBadgeSvg,
   renderProfileCardSvg,
+  renderShareImageSvg,
   type PublicEmbedStats,
 } from "./index";
 
@@ -84,5 +85,26 @@ describe("embed renderer", () => {
     expect(hiddenCost).toContain("hidden");
     expect(escaped).not.toContain("<script>");
     expect(escaped).toContain("&lt;script&gt;");
+  });
+
+  it("renders public-safe share images with cost controls", () => {
+    const share = renderShareImageSvg(
+      { ...stats, showSourceBreakdown: true, showModelBreakdown: true },
+      { metric: "tokens" },
+    );
+    const hiddenCost = renderShareImageSvg(
+      { ...stats, showCost: false },
+      { metric: "cost", theme: "light" },
+    );
+    const privateShare = renderShareImageSvg(null);
+
+    expect(share).toContain('width="1200"');
+    expect(share).toContain("12.3K");
+    expect(share).toContain("gpt-5.4");
+    expect(hiddenCost).toContain("hidden");
+    expect(privateShare).toContain("Public profile is private");
+    expect(`${share}${hiddenCost}`).not.toContain("workspaceKeyHash");
+    expect(`${share}${hiddenCost}`).not.toContain("sourceMessageId");
+    expect(`${share}${hiddenCost}`).not.toContain("<script");
   });
 });

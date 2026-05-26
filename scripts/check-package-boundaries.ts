@@ -26,7 +26,12 @@ const allowedWorkspaceImports: Record<string, string[]> = {
     "@toksync/privacy",
     "@toksync/shared",
   ],
-  "@toksync/api": ["@toksync/db", "@toksync/embed-renderer", "@toksync/shared"],
+  "@toksync/api": [
+    "@toksync/db",
+    "@toksync/embed-renderer",
+    "@toksync/pricing",
+    "@toksync/shared",
+  ],
   "@toksync/web": ["@toksync/shared"],
   "@toksync/worker": ["@toksync/db"],
   "@toksync/collector-core": [

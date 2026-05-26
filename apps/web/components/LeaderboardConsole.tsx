@@ -26,6 +26,7 @@ const METRIC_OPTIONS: Array<{
   label: string;
 }> = [
   { value: "tokens", label: "Tokens" },
+  { value: "cost", label: "Cost" },
   { value: "active_days", label: "Active days" },
   { value: "monthly_tokens", label: "Monthly tokens" },
   { value: "streak", label: "Streak" },
@@ -46,6 +47,7 @@ export function LeaderboardConsole({
   username,
   publicProfile,
   initialRows,
+  initialCurrentUserRank,
   initialMetric,
   initialPeriod,
   initialAvailable,
@@ -54,6 +56,7 @@ export function LeaderboardConsole({
   username: string;
   publicProfile: PublicProfileState;
   initialRows: LeaderboardRow[];
+  initialCurrentUserRank?: LeaderboardRow | null;
   initialMetric: LeaderboardMetric;
   initialPeriod: LeaderboardPeriod;
   initialAvailable: boolean;
@@ -62,6 +65,9 @@ export function LeaderboardConsole({
   const [metric, setMetric] = useState(initialMetric);
   const [period, setPeriod] = useState(initialPeriod);
   const [rows, setRows] = useState(initialRows);
+  const [currentUserRank, setCurrentUserRank] = useState(
+    initialCurrentUserRank ?? null,
+  );
   const [search, setSearch] = useState("");
   const [optInEnabled, setOptInEnabled] = useState(
     publicProfile.leaderboardOptIn ?? false,
@@ -102,8 +108,11 @@ export function LeaderboardConsole({
 
     startTransition(async () => {
       const response = await fetch(
-        `${API_URL}/v1/leaderboard?metric=${nextMetric}&period=${nextPeriod}&limit=50`,
-        { cache: "no-store" },
+        `${API_URL}/v1/leaderboard?metric=${nextMetric}&period=${nextPeriod}&limit=50&currentUser=${encodeURIComponent(username)}`,
+        {
+          cache: "no-store",
+          headers: { "X-TokSync-User": username },
+        },
       );
       const payload = await response.json().catch(() => null);
 
@@ -119,6 +128,7 @@ export function LeaderboardConsole({
 
       const data = payload as LeaderboardResponse;
       setRows(Array.isArray(data.rows) ? data.rows : []);
+      setCurrentUserRank(data.currentUserRank ?? null);
       setMetric(data.metric ?? nextMetric);
       setPeriod(data.period ?? nextPeriod);
       setNotice({
@@ -230,6 +240,21 @@ export function LeaderboardConsole({
               </div>
               <span className={`pill ${optInEnabled ? "good" : ""}`}>
                 {optInEnabled ? "opted in" : "not ranked"}
+              </span>
+            </div>
+            <div className="integrity-row">
+              <div>
+                <strong>Current rank</strong>
+                <span>
+                  {currentUserRank
+                    ? `@${rowUsername(currentUserRank)} is ranked #${currentUserRank.rank} for ${metricHeader(metric).toLowerCase()}.`
+                    : "The current account is not present in the selected public ranking window."}
+                </span>
+              </div>
+              <span className="pill">
+                {currentUserRank
+                  ? `#${currentUserRank.rank}`
+                  : periodLabel(period)}
               </span>
             </div>
             <div className="integrity-row">
@@ -439,6 +464,7 @@ function rowDisplayName(row: LeaderboardRow) {
 
 function metricHeader(metric: LeaderboardMetric) {
   if (metric === "active_days") return "Active days";
+  if (metric === "cost") return "Estimated cost";
   if (metric === "monthly_tokens") return "Monthly tokens";
   if (metric === "streak") return "Streak";
   return "Tokens";
@@ -460,6 +486,10 @@ function formatMetricValue(row: LeaderboardRow, metric: LeaderboardMetric) {
   }
   if (metric === "streak") {
     return formatCompactNumber(readNumber(row, "streak"));
+  }
+  if (metric === "cost") {
+    const value = readNumber(row, "metricValue", "totalCostUsd", "costUsd");
+    return `$${value.toFixed(value >= 100 ? 0 : 2)}`;
   }
   return formatCompactNumber(
     readNumber(row, "metricValue", "tokens", "totalTokens", "value"),

@@ -24,14 +24,16 @@ export default async function LeaderboardPage() {
   };
 
   let initialRows: LeaderboardResponse["rows"] = [];
+  let initialCurrentUserRank: LeaderboardResponse["currentUserRank"] = null;
   let initialAvailable = true;
 
   try {
     const leaderboard = await apiGet<LeaderboardResponse>(
-      `/v1/leaderboard?metric=${DEFAULT_METRIC}&period=${DEFAULT_PERIOD}&limit=50`,
+      `/v1/leaderboard?metric=${DEFAULT_METRIC}&period=${DEFAULT_PERIOD}&limit=50&currentUser=${encodeURIComponent(USER)}`,
       { notFoundAsNull: false },
     );
     initialRows = leaderboard?.rows ?? [];
+    initialCurrentUserRank = leaderboard?.currentUserRank ?? null;
   } catch (error) {
     if (
       error instanceof ApiRequestError &&
@@ -58,6 +60,7 @@ export default async function LeaderboardPage() {
       </header>
       <LeaderboardConsole
         initialAvailable={initialAvailable}
+        initialCurrentUserRank={initialCurrentUserRank}
         initialMetric={DEFAULT_METRIC}
         initialOptInKnown={typeof profile.leaderboardOptIn === "boolean"}
         initialPeriod={DEFAULT_PERIOD}

@@ -56,18 +56,20 @@ test.describe("TokSync visual smoke", () => {
     await assertVisualSignal(page, "body", "public-profile.png", 50);
   });
 
-  test("SVG endpoints render badge/card pixels in browser", async ({
+  test("SVG endpoints render badge, card and share pixels in browser", async ({
     page,
   }) => {
     await page.setContent(`
       <main style="background:#0b0f14;padding:32px;display:grid;gap:18px;width:640px">
         <img id="badge" src="${apiUrl}/v1/badge/demo.svg?metric=tokens&label=TokSync&color=22c55e" />
         <img id="card" src="${apiUrl}/v1/embed/demo.svg?theme=dark" />
+        <img id="share" src="${apiUrl}/v1/share/demo.svg?theme=dark" />
       </main>
     `);
 
     await expect(page.locator("#badge")).toBeVisible();
     await expect(page.locator("#card")).toBeVisible();
+    await expect(page.locator("#share")).toBeVisible();
     await assertVisualSignal(page, "main", "svg-endpoints.png", 20);
   });
 });

@@ -18,6 +18,7 @@
     "@hono/node-server": "^1.14.1",
     "@toksync/db": "workspace:*",
     "@toksync/embed-renderer": "workspace:*",
+    "@toksync/pricing": "workspace:*",
     "@toksync/shared": "workspace:*",
     "hono": "^4.7.10"
   },

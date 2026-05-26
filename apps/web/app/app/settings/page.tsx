@@ -1,6 +1,7 @@
 import {
   apiGet,
   USER,
+  type AuthSessionResponse,
   type DevicesResponse,
   type PublicProfileState,
 } from "../../../lib/api";
@@ -19,6 +20,7 @@ export default async function SettingsPage() {
     showWorkspaceBreakdown: false,
   };
   const devices = (await apiGet<DevicesResponse>("/v1/devices"))?.devices ?? [];
+  const session = await apiGet<AuthSessionResponse>("/v1/auth/session");
 
   return (
     <div className="grid">
@@ -34,13 +36,25 @@ export default async function SettingsPage() {
       </header>
       <section className="grid grid-2">
         <div className="card">
-          <h2 className="section-title">Privacy boundary</h2>
+          <div className="metric-row">
+            <div>
+              <h2 className="section-title">Account session</h2>
+              <p className="muted">
+                GitHub-linked accounts show provider metadata; local dev
+                sessions stay marked as development.
+              </p>
+            </div>
+            <span className="pill good">
+              {session?.user.authProvider ?? "development"}
+            </span>
+          </div>
           <div className="stack-list">
-            <span>Public profile is off by default.</span>
-            <span>README embeds read from public aggregate cache only.</span>
+            <span>@{session?.user.username ?? USER}</span>
+            <span>{session?.user.email ?? "No email on this session"}</span>
             <span>
-              No raw path, message text, tool args, or tool output enters this
-              settings surface.
+              Public profile {profile.enabled ? "enabled" : "disabled"} /
+              leaderboard{" "}
+              {profile.leaderboardOptIn ? "opted in" : "not participating"}
             </span>
           </div>
         </div>
@@ -59,7 +73,8 @@ export default async function SettingsPage() {
               <p className="muted">
                 Device-level revoke and data deletion are live. Account-wide
                 submitted public data deletion is available through the token
-                card control above.
+                card control above; export your vault first if you need a
+                recovery artifact.
               </p>
             </div>
             <span className="pill warn">device-first</span>

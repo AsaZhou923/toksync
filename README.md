@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img alt="stage" src="https://img.shields.io/badge/stage-v0.5-0f7b59?style=flat-square" />
+  <img alt="stage" src="https://img.shields.io/badge/stage-v0.6-0f7b59?style=flat-square" />
   <img alt="payload" src="https://img.shields.io/badge/payload-metrics--only-315fbd?style=flat-square" />
   <img alt="public data" src="https://img.shields.io/badge/public%20data-opt--in-b66f09?style=flat-square" />
   <img alt="package manager" src="https://img.shields.io/badge/pnpm-9.15.9-f69220?style=flat-square" />
@@ -30,7 +30,7 @@
 
 ## What TokSync Is
 
-TokSync v0.5 is a local-first telemetry hub for AI coding tools. It aggregates
+TokSync v0.6 is a local-first telemetry hub for AI coding tools. It aggregates
 token counts, approximate cost, model, source, device, and workspace-label usage
 across machines while keeping private content out of the sync payload.
 
@@ -46,15 +46,15 @@ only, with no source/model subboards.
 
 ## Current Console
 
-| Surface            | Current behavior                                                                                                                                               |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local agent        | `login`, token login, `status`, `sources list`, receipt dry-run, encrypted local device-token fallback                                                         |
-| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs                                            |
-| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, leaderboard, vault, Proof Pack, Wrapped, Redis-capable rate limiting |
-| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                                                                       |
-| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, usage vault, Proof Pack, Wrapped, CSP/security headers                        |
-| Public output      | README badge/profile-card SVG, Public Proof Pack, and public Wrapped card from public cache / receipt digest only                                              |
-| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                                                                 |
+| Surface            | Current behavior                                                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local agent        | `login`, token login, `status`, `sources list`, `report models/sources/daily/monthly/hourly`, receipt dry-run, encrypted local device-token fallback        |
+| Collectors         | Codex CLI, Claude Code, OpenCode, Cursor CSV, Copilot OTEL JSONL, Gemini tmp chats, OpenClaw session/SDK usage logs                                         |
+| API                | GitHub OAuth, device login, user API tokens, receipts, health, merge, export, guardrails, pricing audit, leaderboard, vault, Proof Pack, Wrapped, share SVG |
+| Storage            | `FileTokSyncStore` at `.tmp/toksync-dev.json` by default                                                                                                    |
+| Web                | Dashboard, devices, health, receipts, merge, budgets, local viewer, leaderboard, public leaderboard, usage vault, Proof Pack, Wrapped, CSP/security headers |
+| Public output      | README badge/profile-card/share SVG, Public Proof Pack, and public Wrapped card from public cache / receipt digest only                                     |
+| Verification stack | Vitest, Playwright E2E, visual smoke, perf smoke, Turbo checks                                                                                              |
 
 ## Quick Start
 
@@ -93,6 +93,13 @@ TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/cod
 the current agent process after it is read. Device login stores `deviceToken` as
 `deviceTokenEncrypted` in `config.json` with AES-256-GCM and a local
 `config.key`; legacy plaintext config files load and migrate on the next save.
+
+Local reports can be generated without opening the Web dashboard:
+
+```bash
+pnpm agent report models --fixture ./packages/test-fixtures/codex/basic
+pnpm agent report daily --fixture ./packages/test-fixtures/codex/basic --format json
+```
 
 Default local services:
 
@@ -165,22 +172,26 @@ metrics vault plus real-format source parity adapters, and v0.5 turns Public
 Proof Pack / Wrapped into visible app surfaces backed by public-safe API
 contracts:
 
-| Phase | Planned capability   | Boundary                                                                                                    |
-| ----- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| v0.1  | Public label privacy | Implemented as private-by-default labels with explicit public toggle and safe-label filtering               |
-| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                                                              |
-| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                                                               |
-| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                                                                |
-| v0.2  | GitHub OAuth         | Implemented as first production browser login; email magic link deferred                                    |
-| v0.2  | User API token       | Implemented for private/headless metrics sync                                                               |
-| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                                    |
-| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                               |
-| v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                                         |
-| v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing                |
-| v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import                      |
-| v0.4+ | Stabilization gate   | FileStore repository mutation transactions, parser/component coverage, token encryption, Redis limit switch |
-| v0.5  | Public Proof Pack    | Implemented API and `/app/proof-pack` console from public aggregates plus receipt digests                   |
-| v0.5  | Wrapped              | Implemented `/app/wrapped`, private summary, and public low-sensitivity Wrapped card                        |
+| Phase | Planned capability   | Boundary                                                                                                     |
+| ----- | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| v0.1  | Public label privacy | Implemented as private-by-default labels with explicit public toggle and safe-label filtering                |
+| v0.2  | Merge Copilot        | Implemented as private duplicate-run summaries                                                               |
+| v0.2  | Sync Privacy Receipt | Implemented with digest and safe field groups                                                                |
+| v0.2  | Source Health Radar  | Implemented for source sync status/freshness                                                                 |
+| v0.2  | GitHub OAuth         | Implemented as first production browser login; email magic link deferred                                     |
+| v0.2  | User API token       | Implemented for private/headless metrics sync                                                                |
+| v0.2  | Metrics export       | Implemented JSON/CSV without private IDs                                                                     |
+| v0.3  | Cost Guardrails      | Implemented for private budget, spike, unknown-pricing alerts                                                |
+| v0.3  | Leaderboard          | Implemented global-only; source/model subboard queries are rejected                                          |
+| v0.4  | Source parity        | Implemented Cursor usage CSV, Copilot OTEL, Gemini tmp chats, and OpenClaw usage log parsing                 |
+| v0.4  | Private Usage Vault  | Implemented passphrase-encrypted metrics backup, artifact storage, preview, and import                       |
+| v0.4+ | Stabilization gate   | FileStore repository mutation transactions, parser/component coverage, token encryption, Redis limit switch  |
+| v0.5  | Public Proof Pack    | Implemented API and `/app/proof-pack` console from public aggregates plus receipt digests                    |
+| v0.5  | Wrapped              | Implemented `/app/wrapped`, private summary, and public low-sensitivity Wrapped card                         |
+| v0.6  | CLI reports          | Implemented local `report` views for models, sources, daily, monthly, hourly, table, JSON, and source filter |
+| v0.6  | Public profile/share | Implemented public profile section tabs, owner controls, share SVG, and README badge/card/share parameters   |
+| v0.6  | Leaderboard UX       | Implemented public `/leaderboard`, cost metric, search, period tabs, and current-user rank                   |
+| v0.6  | Settings/pricing UX  | Implemented account status, copy-once token UX, token revoke metadata, and model pricing audit queue         |
 
 Billing, subscriptions, payment providers, plan limits, billing UI, content
 sync, search, eval export, and source/model leaderboard subboards remain out of
@@ -215,6 +226,8 @@ Agent examples:
 ```bash
 pnpm agent status
 pnpm agent sources list
+pnpm agent report models --fixture ./packages/test-fixtures/codex/basic
+pnpm agent report hourly --fixture ./packages/test-fixtures/codex/basic --source codex --format table
 pnpm agent logout
 TOKSYNC_CONFIG_DIR=.tmp/toksync-agent pnpm agent status
 ```

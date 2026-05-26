@@ -1693,8 +1693,9 @@ export class TokSyncRepository {
     const period = query.period ?? "all_time";
     const limit = Math.max(1, Math.min(query.limit ?? 20, 100));
     const generatedAt = new Date().toISOString();
+    const search = query.search?.trim().toLowerCase();
 
-    const rows = data.publicProfileStats
+    const rankedRows = data.publicProfileStats
       .filter((stats) => stats.leaderboardOptIn)
       .map((stats) => leaderboardEntryFromPublicStats(stats, metric, period))
       .filter((row) => row.metricValue > 0)
@@ -1704,13 +1705,27 @@ export class TokSyncRepository {
           right.totalTokens - left.totalTokens ||
           left.username.localeCompare(right.username),
       )
-      .slice(0, limit)
       .map((row, index) => ({ rank: index + 1, ...row }));
+    const currentUserRank = query.currentUsername
+      ? (rankedRows.find(
+          (row) => row.username === normalizeUsername(query.currentUsername!),
+        ) ?? null)
+      : null;
+    const rows = rankedRows
+      .filter((row) => {
+        if (!search) return true;
+        return (
+          row.username.toLowerCase().includes(search) ||
+          (row.displayName ?? "").toLowerCase().includes(search)
+        );
+      })
+      .slice(0, limit);
 
     return {
       metric,
       period,
       generatedAt,
+      currentUserRank,
       rows,
     };
   }
@@ -2178,9 +2193,11 @@ export interface DashboardFilters {
 }
 
 export interface LeaderboardQuery {
-  metric?: "tokens" | "active_days" | "streak" | "monthly_tokens";
+  metric?: "tokens" | "cost" | "active_days" | "streak" | "monthly_tokens";
   period?: "all_time" | "weekly" | "monthly";
   limit?: number;
+  search?: string;
+  currentUsername?: string;
 }
 
 const RECEIPT_UPLOADED_FIELDS = [
@@ -2454,18 +2471,23 @@ function leaderboardEntryFromPublicStats(
   const metricValue =
     metric === "tokens"
       ? window.tokens
-      : metric === "active_days"
-        ? window.activeDays
-        : metric === "monthly_tokens"
-          ? leaderboardWindowFromDailyPublic(stats.dailyPublic, "monthly")
-              .tokens
-          : window.streak;
+      : metric === "cost"
+        ? stats.showCost
+          ? window.costUsd
+          : 0
+        : metric === "active_days"
+          ? window.activeDays
+          : metric === "monthly_tokens"
+            ? leaderboardWindowFromDailyPublic(stats.dailyPublic, "monthly")
+                .tokens
+            : window.streak;
 
   return {
     username: stats.usernameLower,
     displayName: stats.displayName,
     avatarUrl: stats.avatarUrl,
     totalTokens: stats.totalTokens,
+    totalCostUsd: stats.showCost ? stats.totalCostUsd : 0,
     activeDays: window.activeDays,
     streak: window.streak,
     monthlyTokens: leaderboardWindowFromDailyPublic(
@@ -2482,7 +2504,7 @@ function leaderboardWindowFromDailyPublic(
   period: NonNullable<LeaderboardQuery["period"]>,
 ) {
   if (!dailyPublic.length) {
-    return { tokens: 0, activeDays: 0, streak: 0 };
+    return { tokens: 0, costUsd: 0, activeDays: 0, streak: 0 };
   }
   const sorted = [...dailyPublic].sort((left, right) =>
     left.date.localeCompare(right.date),
@@ -2500,9 +2522,10 @@ function leaderboardWindowFromDailyPublic(
           };
   const filtered = sorted.filter((row) => isWithinDateWindow(row.date, window));
   const tokens = round(filtered.reduce((sum, row) => sum + row.tokens, 0));
+  const costUsd = round(filtered.reduce((sum, row) => sum + row.costUsd, 0));
   const activeDays = filtered.filter((row) => row.tokens > 0).length;
   const streak = currentActiveStreak(filtered, window.end);
-  return { tokens, activeDays, streak };
+  return { tokens, costUsd, activeDays, streak };
 }
 
 function currentActiveStreak(

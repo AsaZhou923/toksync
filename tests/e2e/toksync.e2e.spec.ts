@@ -69,7 +69,7 @@ test.describe("TokSync local agent flow", () => {
     await expect(
       page.getByRole("heading", { name: "README embed" }),
     ).toBeVisible();
-    await expect(page.locator(".svg-preview img")).toHaveCount(2);
+    await expect(page.locator(".svg-preview img")).toHaveCount(3);
     await expect(page.getByTestId("badge-snippet")).toContainText(
       `${apiUrl}/v1/badge/demo.svg?metric=tokens`,
     );
@@ -119,7 +119,7 @@ test.describe("TokSync local agent flow", () => {
 
     await page.goto("/u/demo");
     await expect(page.getByRole("heading", { name: "@demo" })).toBeVisible();
-    await expect(page.locator(".svg-preview img")).toHaveCount(2);
+    await expect(page.locator(".svg-preview img")).toHaveCount(3);
 
     await page.goto("/app/receipts");
     await expect(page.getByRole("heading", { name: "Receipts" })).toBeVisible();

@@ -34,8 +34,10 @@ export function PublicEmbedPanel({
   const encodedUsername = encodeURIComponent(username);
   const badgeUrl = `${apiBaseUrl}/v1/badge/${encodedUsername}.svg?metric=${metric}`;
   const cardUrl = `${apiBaseUrl}/v1/embed/${encodedUsername}.svg?theme=${theme}&metric=${metric}${compact ? "&compact=1" : ""}`;
+  const shareUrl = `${apiBaseUrl}/v1/share/${encodedUsername}.svg?theme=${theme}&metric=${metric}`;
   const previewBadgeUrl = withCacheKey(badgeUrl, cacheKey);
   const previewCardUrl = withCacheKey(cardUrl, cacheKey);
+  const previewShareUrl = withCacheKey(shareUrl, cacheKey);
 
   return (
     <>
@@ -106,6 +108,9 @@ export function PublicEmbedPanel({
               <div className="svg-preview">
                 <img src={previewCardUrl} alt="TokSync profile card preview" />
               </div>
+              <div className="svg-preview">
+                <img src={previewShareUrl} alt="TokSync share image preview" />
+              </div>
             </>
           ) : (
             <div className="empty-state">
@@ -121,6 +126,9 @@ export function PublicEmbedPanel({
         </div>
         <div className="command" data-testid="card-snippet">
           {`![TokSync profile](${cardUrl})`}
+        </div>
+        <div className="command" data-testid="share-snippet">
+          {`![TokSync share](${shareUrl})`}
         </div>
         <a className="btn" href={profileUrl}>
           <Eye size={16} />

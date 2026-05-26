@@ -1,6 +1,10 @@
 import { formatCompactNumber, formatUsd } from "@toksync/shared";
 import { SortableTableHeader } from "../../../components/SortableTableHeader";
-import { apiGet, type DashboardBreakdowns } from "../../../lib/api";
+import {
+  apiGet,
+  type DashboardBreakdowns,
+  type PricingModelsResponse,
+} from "../../../lib/api";
 import {
   compareText,
   readSort,
@@ -20,6 +24,7 @@ export default async function ModelsPage({
   searchParams?: Promise<SortSearchParams>;
 }) {
   const data = await apiGet<DashboardBreakdowns>("/v1/dashboard/breakdowns");
+  const pricing = await apiGet<PricingModelsResponse>("/v1/pricing/models");
   const sort = readSort<ModelSortField>(
     await resolveSearchParams(searchParams),
     MODEL_SORT_FIELDS,
@@ -38,6 +43,43 @@ export default async function ModelsPage({
           <h1>Models</h1>
         </div>
       </header>
+      <section className="grid grid-2">
+        <div className="card">
+          <h2 className="section-title">Pricing lookup</h2>
+          <div className="stack-list">
+            <span>Costs are estimates, not provider billing truth.</span>
+            <span>
+              Unknown models stay at $
+              {(pricing?.unknownModelsDefaultCostUsd ?? 0).toFixed(0)} until a
+              first-party price source is added.
+            </span>
+            <span>
+              Aliases normalize to canonical model IDs before estimates are
+              calculated.
+            </span>
+          </div>
+        </div>
+        <div className="card">
+          <h2 className="section-title">Unknown review queue</h2>
+          <div className="stack-list">
+            {(pricing?.models ?? []).filter((row) => !row.known).length ===
+            0 ? (
+              <span>
+                No unknown pricing rows in the current private rollup.
+              </span>
+            ) : (
+              (pricing?.models ?? [])
+                .filter((row) => !row.known)
+                .slice(0, 5)
+                .map((row) => (
+                  <span key={row.modelId}>
+                    {row.modelId} / {formatCompactNumber(row.tokens)} tokens
+                  </span>
+                ))
+            )}
+          </div>
+        </div>
+      </section>
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -70,17 +112,35 @@ export default async function ModelsPage({
               >
                 Messages
               </SortableTableHeader>
+              <th>Pricing</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.key}>
-                <td>{row.key}</td>
-                <td>{formatCompactNumber(row.tokens)}</td>
-                <td>{formatUsd(row.costUsd)}</td>
-                <td>{row.messages}</td>
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const pricingRow = pricing?.models.find(
+                (item) => item.modelId === row.key,
+              );
+              return (
+                <tr key={row.key}>
+                  <td>{row.key}</td>
+                  <td>{formatCompactNumber(row.tokens)}</td>
+                  <td>{formatUsd(row.costUsd)}</td>
+                  <td>{row.messages}</td>
+                  <td>
+                    <div className="stack-list compact">
+                      <span
+                        className={`pill ${pricingRow?.known ? "good" : "warn"}`}
+                      >
+                        {pricingRow?.known ? "known" : "unknown"}
+                      </span>
+                      <span className="table-subtle">
+                        {pricingRow?.canonicalModelId ?? "review required"}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

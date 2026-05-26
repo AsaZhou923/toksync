@@ -2,6 +2,87 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-26-v0-6-tokscale-visible-parity"></a>
+
+## 2026-05-26 - v0.6 Tokscale visible parity
+
+日期：2026-05-26
+
+本次更新完成 v0.6 的 Tokscale 可见体验补强第一版：不扩大 metrics-only/private-first 边界，不进入 v0.7 的 Postgres/worker/snapshot/merge actions，而是补齐本地报表、公开资料页、排行榜、settings、pricing explainability 和公开分享素材。
+
+## 概览
+
+- Agent 新增 `report` 命令，支持 `models`、`sources`、`daily`、`monthly`、`hourly` 视图，支持 `--source` 过滤和 `table` / `json` 输出。
+- Public profile 增加 section tabs、owner controls 和 share image 入口；badge、profile card、share image 都继续只读 public aggregate cache。
+- Leaderboard 增加公开 `/leaderboard` 页面、`cost` metric、server-side search、period tabs 和 current-user rank；source/model/cursor 查询仍被拒绝。
+- Settings 增加 account session 状态、copy-once token 展示、token last-used/revoke metadata 和 submitted public data deletion 前的 export 提示。
+- Pricing 增加 lookup/audit helper 与 `/v1/pricing/models`，unknown model 继续按 0 成本处理，并在 Models 页面形成 review queue。
+- Embed renderer 新增 public-safe share SVG，README/embed 面板输出 badge、card、share 三类可复制素材。
+
+## Privacy / Public Data
+
+- CLI report 输出只包含 source/model/date/hour 聚合、token、cost、events、messages、turns，不输出 raw path、workspace hash、source session id 或 source message id。
+- Public profile、badge、card、share image、leaderboard、proof 和 wrapped 仍只读取 public aggregate、public-safe daily 或 receipt digest。
+- `showCost=false` 时公开输出不展示成本；unknown pricing 不臆造价格，cost 仍是 approximate estimate，不是 provider billing truth。
+
+## 影响文件
+
+### Apps
+
+- `apps/agent/src/index.ts`
+- `apps/agent/src/index.test.ts`
+- `apps/api/package.json`
+- `apps/api/src/app.ts`
+- `apps/api/src/app.test.ts`
+- `apps/web/app/app/leaderboard/page.tsx`
+- `apps/web/app/leaderboard/page.tsx`
+- `apps/web/app/app/models/page.tsx`
+- `apps/web/app/app/settings/page.tsx`
+- `apps/web/app/app/sortable-pages.test.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/app/u/[username]/page.tsx`
+- `apps/web/components/ApiTokenCard.tsx`
+- `apps/web/components/LeaderboardConsole.tsx`
+- `apps/web/components/PublicEmbedPanel.tsx`
+- `apps/web/components/console-components.test.tsx`
+- `apps/web/lib/api.ts`
+
+### Packages
+
+- `packages/db/src/repository.ts`
+- `packages/embed-renderer/src/index.ts`
+- `packages/embed-renderer/src/index.test.ts`
+- `packages/pricing/src/index.ts`
+- `packages/pricing/src/index.test.ts`
+
+### Scripts / Tests
+
+- `scripts/check-package-boundaries.ts`
+- `tests/e2e/toksync.e2e.spec.ts`
+- `tests/visual/embed.visual.spec.ts`
+- `pnpm-lock.yaml`
+
+### Docs
+
+- `README.md`
+- `README.zh-CN.md`
+- `docs/changelog/CHANGELOG.md`
+- External TokSync sitemap, API design, testing spec, current feature guide, v0.6-v0.7 plan, and docs change list
+
+## 验证
+
+- 已通过：`pnpm exec vitest run apps/agent/src/index.test.ts packages/pricing/src/index.test.ts packages/embed-renderer/src/index.test.ts apps/api/src/app.test.ts apps/web/components/console-components.test.tsx`
+- 已通过：`pnpm format:check`
+- 已通过：`pnpm check:boundaries`
+- 已通过：`pnpm typecheck`
+- 已通过：`pnpm lint`
+- 已通过：`pnpm test`（20 个测试文件，136 个测试通过）
+- 已通过：`pnpm build`
+- 已通过：`pnpm test:e2e`（1 个 Playwright 流程通过）
+- 已通过：`pnpm test:visual`（2 个视觉测试通过）
+- 已通过：`pnpm test:perf`（parser 4097 events / 87ms、ingest 10000 / 174ms、dashboard 4ms、svg 1ms）
+- 已通过：`pnpm test:full`
+
 <a id="2026-05-24-dashboard-upload-pricing-hardening"></a>
 
 ## 2026-05-24 - dashboard upload pricing hardening

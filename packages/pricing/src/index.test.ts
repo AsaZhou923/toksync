@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { estimateCostUsd, pricingForModel, roundUsd } from "./index";
+import {
+  auditModelPricing,
+  estimateCostUsd,
+  lookupModelPricing,
+  pricingForModel,
+  roundUsd,
+} from "./index";
 
 describe("pricing helpers", () => {
   it("uses official OpenAI pricing with cache reads and output-priced reasoning", () => {
@@ -118,5 +124,44 @@ describe("pricing helpers", () => {
 
   it("rounds USD values to six decimal places", () => {
     expect(roundUsd(0.123456789)).toBe(0.123457);
+  });
+
+  it("explains exact, alias and unknown pricing lookup results", () => {
+    expect(lookupModelPricing("gpt-5.4")).toMatchObject({
+      modelId: "gpt-5.4",
+      normalizedModelId: "gpt-5.4",
+      canonicalModelId: "gpt-5.4",
+      known: true,
+    });
+    expect(
+      lookupModelPricing("openai/gpt-5.1-codex-mini-latest"),
+    ).toMatchObject({
+      normalizedModelId: "openai/gpt-5.1-codex-mini-latest",
+      canonicalModelId: "gpt-5.1-codex-mini",
+      known: true,
+    });
+    expect(lookupModelPricing("mystery-model")).toMatchObject({
+      normalizedModelId: "mystery-model",
+      known: false,
+      explanation: expect.stringContaining("estimated cost at $0"),
+    });
+  });
+
+  it("builds an unknown-first pricing audit queue from model rollups", () => {
+    expect(
+      auditModelPricing([
+        { modelId: "gpt-5.4", tokens: 1000, costUsd: 0.01 },
+        { modelId: "mystery-model", tokens: 900, costUsd: 0 },
+        { modelId: "other-mystery", tokens: 1200, costUsd: 0 },
+      ]).map((row) => ({
+        modelId: row.modelId,
+        known: row.known,
+        tokens: row.tokens,
+      })),
+    ).toEqual([
+      { modelId: "other-mystery", known: false, tokens: 1200 },
+      { modelId: "mystery-model", known: false, tokens: 900 },
+      { modelId: "gpt-5.4", known: true, tokens: 1000 },
+    ]);
   });
 });

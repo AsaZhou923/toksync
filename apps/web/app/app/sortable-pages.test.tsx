@@ -121,5 +121,41 @@ function responseForPath(pathname: string) {
     };
   }
 
+  if (pathname === "/v1/pricing/models") {
+    return {
+      estimatedNotBillingTruth: true,
+      unknownModelsDefaultCostUsd: 0,
+      models: [
+        {
+          modelId: "gpt-5.5",
+          normalizedModelId: "gpt-5.5",
+          canonicalModelId: "gpt-5.5",
+          known: true,
+          tokens: 900,
+          costUsd: 9,
+          explanation: "Exact pricing table match.",
+        },
+        {
+          modelId: "gpt-5.4",
+          normalizedModelId: "gpt-5.4",
+          canonicalModelId: "gpt-5.4",
+          known: true,
+          tokens: 500,
+          costUsd: 2,
+          explanation: "Exact pricing table match.",
+        },
+        {
+          modelId: "claude-3",
+          normalizedModelId: "claude-3",
+          canonicalModelId: "claude-3",
+          known: true,
+          tokens: 100,
+          costUsd: 1,
+          explanation: "Exact pricing table match.",
+        },
+      ],
+    };
+  }
+
   return {};
 }

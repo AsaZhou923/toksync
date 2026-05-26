@@ -156,6 +156,7 @@ export interface CostGuardrailUpsertInput {
 
 export type LeaderboardMetric =
   | "tokens"
+  | "cost"
   | "active_days"
   | "monthly_tokens"
   | "streak";
@@ -181,6 +182,7 @@ export interface LeaderboardResponse {
   rows: LeaderboardRow[];
   metric: LeaderboardMetric;
   period: LeaderboardPeriod;
+  currentUserRank?: LeaderboardRow | null;
   nextCursor?: string;
 }
 
@@ -317,6 +319,31 @@ export interface DashboardBreakdowns {
   workspaces: BreakdownRow[];
 }
 
+export interface PricingModelAuditRow {
+  modelId: string;
+  normalizedModelId: string;
+  canonicalModelId?: string;
+  known: boolean;
+  tokens: number;
+  costUsd: number;
+  explanation: string;
+  pricing?: {
+    inputPerMillion: number;
+    outputPerMillion: number;
+    cacheReadPerMillion: number;
+    cacheWritePerMillion: number;
+    source: string;
+    sourceUrl: string;
+    note?: string;
+  };
+}
+
+export interface PricingModelsResponse {
+  estimatedNotBillingTruth: boolean;
+  unknownModelsDefaultCostUsd: number;
+  models: PricingModelAuditRow[];
+}
+
 export interface SourceHealthRow {
   id: string;
   source: string;
@@ -414,6 +441,17 @@ export async function currentUsername() {
     notFoundAsNull: false,
   });
   return session?.user.username ?? USER;
+}
+
+export async function optionalCurrentUsername() {
+  try {
+    const session = await apiGet<AuthSessionResponse>("/v1/auth/session", {
+      notFoundAsNull: false,
+    });
+    return session?.user.username ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function apiUrl(path: string) {

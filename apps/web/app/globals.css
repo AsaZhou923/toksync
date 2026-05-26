@@ -1223,6 +1223,17 @@ h3 {
   color: #eef5ef;
 }
 
+.link-button {
+  border: 0;
+  background: transparent;
+  color: #1f5f45;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0 0 0 6px;
+  text-decoration: underline;
+}
+
 .code-viewer {
   margin: 0;
   min-height: 320px;

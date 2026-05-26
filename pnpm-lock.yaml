@@ -78,6 +78,9 @@ importers:
       '@toksync/embed-renderer':
         specifier: workspace:*
         version: link:../../packages/embed-renderer
+      '@toksync/pricing':
+        specifier: workspace:*
+        version: link:../../packages/pricing
       '@toksync/shared':
         specifier: workspace:*
         version: link:../../packages/shared

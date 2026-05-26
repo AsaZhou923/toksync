@@ -10,6 +10,20 @@ export interface ModelPricing {
   note?: string;
 }
 
+export interface ModelPricingLookup {
+  modelId: string;
+  normalizedModelId: string;
+  canonicalModelId?: string;
+  known: boolean;
+  pricing?: ModelPricing;
+  explanation: string;
+}
+
+export interface ModelPricingAuditRow extends ModelPricingLookup {
+  tokens: number;
+  costUsd: number;
+}
+
 const SOURCES = {
   openaiPricing: "https://openai.com/api/pricing/",
   openaiGpt51CodexMini:
@@ -164,6 +178,41 @@ export function pricingForModel(modelId: string): ModelPricing | undefined {
   const pricing = key ? MODEL_PRICING[key] : undefined;
   pricingCache.set(modelId, pricing);
   return pricing;
+}
+
+export function lookupModelPricing(modelId: string): ModelPricingLookup {
+  const normalizedModelId = normalizeModelId(modelId);
+  const canonical = canonicalModelId(modelId);
+  const pricing = canonical ? MODEL_PRICING[canonical] : undefined;
+  return {
+    modelId,
+    normalizedModelId,
+    ...(canonical ? { canonicalModelId: canonical } : {}),
+    known: Boolean(pricing),
+    ...(pricing ? { pricing } : {}),
+    explanation: pricing
+      ? canonical === normalizedModelId
+        ? "Exact pricing table match. Cost remains an estimate, not billing truth."
+        : `Alias normalized to ${canonical}. Cost remains an estimate, not billing truth.`
+      : "Unknown pricing. TokSync keeps estimated cost at $0 until a first-party price source is added.",
+  };
+}
+
+export function auditModelPricing(
+  rows: Array<{ modelId: string; tokens: number; costUsd: number }>,
+): ModelPricingAuditRow[] {
+  return rows
+    .map((row) => ({
+      ...lookupModelPricing(row.modelId),
+      tokens: row.tokens,
+      costUsd: row.costUsd,
+    }))
+    .sort((left, right) => {
+      if (left.known !== right.known) return left.known ? 1 : -1;
+      return (
+        right.tokens - left.tokens || left.modelId.localeCompare(right.modelId)
+      );
+    });
 }
 
 export function estimateCostUsd(modelId: string, tokens: TokenBreakdown) {
