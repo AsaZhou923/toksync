@@ -2,6 +2,46 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-05-28-codebase-optimization"></a>
+
+## 2026-05-28 - Codebase optimization
+
+日期：2026-05-28
+
+本次更新对 monorepo 进行全面的代码组织优化与基础设施改进，不改变业务逻辑与 API 契约。
+
+### CI / 基础设施
+
+- CI 增加 pnpm store、Playwright 浏览器、Next.js 构建、Turbo 四层缓存，显著减少重复构建时间
+- CI 失败时自动上传 Playwright trace/screenshot 产物（7 天保留）
+- `.env` 补全 `DEVICE_CODE_TTL_SECONDS`、`TOKSYNC_RATE_LIMIT_REDIS_URL`、`TOKSYNC_CONFIG_ENCRYPTION_KEY` 三个变量，与 `.env.example` 对齐
+
+### 代码组织
+
+- **API 路由拆分**：`apps/api/src/app.ts`（1298 行 → ~250 行）的路由处理函数提取到 `routes/` 目录：
+  - `routes/auth.ts` — GitHub OAuth、session、设备码认证
+  - `routes/sync.ts` — 同步状态、usage-batch、content-batch
+  - `routes/dashboard.ts` — Dashboard、pricing、sync-runs、receipts、source-health、cost guardrails、merge、exports
+  - `routes/devices.ts` — 设备管理、local preview
+  - `routes/settings.ts` — API token、提交数据管理
+  - `routes/public.ts` — 公开 profile、leaderboard、wrapped、badge/embed/share
+  - `auth-helpers.ts` — 提取 cookie/session/OAuth 辅助函数供所有路由复用
+- **Collector 解析器拆分**：`packages/collector-core/src/source-parsers.ts`（915 行 → 50 行）的 Copilot/Gemini/OpenClaw 解析器分别提取到：
+  - `source-parsers/copilot.ts`
+  - `source-parsers/gemini.ts`
+  - `source-parsers/openclaw.ts`
+- **Web 类型去重**：`apps/web/lib/v02.ts` 复用 `api.ts` 中的 `BreakdownRow` 和 `SyncRun` 类型，消除重复定义
+- **Playwright 脚本统一**：提取 `scripts/playwright-utils.mjs`，消除 `run-playwright.mjs` 和 `playwright-web-server.mjs` 中的重复函数
+
+### 其他修复
+
+- `apps/web/app/app/budgets/page.tsx`：改为 Next.js `redirect()` 而非静默渲染 guardrails 页面
+- `vitest.config.ts`：增加 `tests/**/*.test.ts` include 模式，并为 `.spec.ts` Playwright 测试添加注释说明
+
+### 待后续
+
+- `packages/db/src/repository.ts`（3243 行）的域模块拆分——当前内部方法相互依赖深，需配合全面测试回归
+
 <a id="2026-05-26-v0-6-tokscale-visible-parity"></a>
 
 ## 2026-05-26 - v0.6 Tokscale visible parity

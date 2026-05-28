@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { command, commandArgs, killProcessTree } from "./playwright-utils.mjs";
 
 const mode = process.argv[2];
 
@@ -7,10 +8,10 @@ if (mode !== "api" && mode !== "web") {
   process.exit(1);
 }
 
-const useCmd = process.platform === "win32";
 const children = new Set();
 
 function runSync(args) {
+  // args: ["pnpm", "db:reset"] etc.
   const result = spawnSync(command(), commandArgs(args), {
     env: process.env,
     shell: false,
@@ -20,6 +21,7 @@ function runSync(args) {
 }
 
 function spawnLongRunning(args) {
+  // args: ["pnpm", "--filter", "@toksync/api", "start"] etc.
   const child = spawn(command(), commandArgs(args), {
     detached: process.platform !== "win32",
     env: process.env,
@@ -38,14 +40,6 @@ function spawnLongRunning(args) {
   });
 }
 
-function command() {
-  return useCmd ? "cmd.exe" : "pnpm";
-}
-
-function commandArgs(args) {
-  return useCmd ? ["/d", "/s", "/c", ["pnpm", ...args].join(" ")] : args;
-}
-
 let shuttingDown = false;
 
 function shutdown() {
@@ -57,36 +51,18 @@ function shutdown() {
   setTimeout(() => process.exit(0), 250).unref();
 }
 
-function killProcessTree(pid) {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-    });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // The process already exited.
-    }
-  }
-}
-
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("SIGHUP", shutdown);
 process.on("exit", shutdown);
 
 if (mode === "api") {
-  runSync(["db:reset"]);
-  runSync(["db:seed"]);
-  spawnLongRunning(["--filter", "@toksync/api", "start"]);
+  runSync(["pnpm", "db:reset"]);
+  runSync(["pnpm", "db:seed"]);
+  spawnLongRunning(["pnpm", "--filter", "@toksync/api", "start"]);
 } else {
   spawnLongRunning([
+    "pnpm",
     "--filter",
     "@toksync/web",
     "exec",

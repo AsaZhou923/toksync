@@ -46,7 +46,7 @@ The v0.1 loop is:
 - Runtime stack: TypeScript, Node 22-style ESM, Turbo, Vitest, Playwright.
 - Apps:
   - `apps/agent`: Commander CLI with `login`, `logout`, `status`, `sources list`, and `sync`.
-  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, public proof, wrapped summary/card, badge, embed, and opt-in leaderboard routes.
+  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, public proof, wrapped summary/card, badge, embed, and opt-in leaderboard routes. Route handlers are organized by domain under `apps/api/src/routes/` (auth, sync, dashboard, devices, settings, public, vault). Shared auth helpers live in `apps/api/src/auth-helpers.ts`.
   - `apps/web`: Next.js app for landing, dashboard, docs, device auth, source health, receipts, merge, cost guardrails, leaderboard settings, public profile, embed settings, Proof Pack, and Wrapped.
   - `apps/worker`: lightweight worker/health surface; rollup work is currently synchronous in the repository layer.
 - Packages:

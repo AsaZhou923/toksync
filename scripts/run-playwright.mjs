@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
+import { command, commandArgs, killProcessTree } from "./playwright-utils.mjs";
 
 const project = process.argv[2];
 if (project !== "e2e" && project !== "visual") {
@@ -133,18 +134,7 @@ async function waitForUrl(url) {
   );
 }
 
-function command() {
-  return process.platform === "win32" ? "cmd.exe" : "pnpm";
-}
 
-function commandArgs(args) {
-  if (process.platform !== "win32") return args.slice(1);
-  return ["/d", "/s", "/c", args.map(quoteArg).join(" ")];
-}
-
-function quoteArg(value) {
-  return /[\s"]/u.test(value) ? `"${value.replace(/"/gu, '\\"')}"` : value;
-}
 
 async function shutdown() {
   if (shuttingDown) return;
@@ -186,24 +176,7 @@ function waitForChildrenToExit(childrenToWaitFor, timeoutMs) {
   });
 }
 
-function killProcessTree(pid) {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-    });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // The process already exited.
-    }
-  }
-}
+
 
 async function waitForPortsToClose(ports) {
   const deadline = Date.now() + 30_000;

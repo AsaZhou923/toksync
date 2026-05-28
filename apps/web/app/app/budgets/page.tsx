@@ -1,7 +1,5 @@
-import GuardrailsPage from "../guardrails/page";
+import { redirect } from "next/navigation";
 
-export { dynamic } from "../guardrails/page";
-
-export default async function BudgetsPage() {
-  return GuardrailsPage();
+export default function BudgetsPage() {
+  redirect("/app/guardrails");
 }

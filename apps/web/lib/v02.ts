@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 import { SOURCE_REGISTRY } from "@toksync/shared";
+import type { BreakdownRow, SyncRun } from "./api";
+export type { BreakdownRow, SyncRun };
 
-export interface BreakdownRow {
-  key: string;
-  tokens: number;
-  costUsd: number;
-  messages: number;
-}
-
+// UI-display variants of API types — fields are optional because UI
+// builders accept partial data (e.g. loading states, missing dashboards).
 export interface DashboardSummary {
   totals?: {
     tokens: number;
@@ -32,20 +29,6 @@ export interface UsageDailyDay {
       costUsd: number;
     }
   >;
-}
-
-export interface SyncRun {
-  id: string;
-  clientRunId: string;
-  mode: "dry-run" | "sync";
-  status: "started" | "completed" | "failed" | "partial";
-  sourceSummary: Record<string, number>;
-  insertedCount: number;
-  updatedCount: number;
-  skippedCount: number;
-  errorCount: number;
-  startedAt: string;
-  finishedAt?: string;
 }
 
 export interface PublicProfileStateLike {
