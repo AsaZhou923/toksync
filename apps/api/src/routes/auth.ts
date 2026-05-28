@@ -1,10 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import {
-  apiError,
-  deviceStartInputSchema,
-} from "@toksync/shared";
+import { apiError, deviceStartInputSchema } from "@toksync/shared";
 import type { TokSyncRepository } from "@toksync/db";
 import type { GitHubOAuthConfig } from "../app";
 import {
@@ -30,7 +27,10 @@ export function registerAuthRoutes(
   app.get("/v1/auth/github/start", (c) => {
     if (!githubOAuth)
       return c.json(
-        apiError("not_configured", "GitHub OAuth is not configured for this deployment"),
+        apiError(
+          "not_configured",
+          "GitHub OAuth is not configured for this deployment",
+        ),
         503,
       );
     const state = randomBytes(24).toString("base64url");
@@ -49,16 +49,26 @@ export function registerAuthRoutes(
   app.get("/v1/auth/github/callback", async (c) => {
     if (!githubOAuth)
       return c.json(
-        apiError("not_configured", "GitHub OAuth is not configured for this deployment"),
+        apiError(
+          "not_configured",
+          "GitHub OAuth is not configured for this deployment",
+        ),
         503,
       );
     const code = c.req.query("code");
     const state = c.req.query("state");
     const stateCookie = oauthStateFromRequest(c.req.raw);
     if (!code || !state || !stateCookie || state !== stateCookie.state) {
-      return c.json(apiError("invalid_oauth_state", "Invalid OAuth state"), 400);
+      return c.json(
+        apiError("invalid_oauth_state", "Invalid OAuth state"),
+        400,
+      );
     }
-    const token = await exchangeGitHubCode(githubOAuth, code, stateCookie.codeVerifier);
+    const token = await exchangeGitHubCode(
+      githubOAuth,
+      code,
+      stateCookie.codeVerifier,
+    );
     if (!token) {
       return c.json(
         apiError("oauth_exchange_failed", "GitHub OAuth token exchange failed"),
@@ -73,7 +83,10 @@ export function registerAuthRoutes(
       );
     }
     const user = repo.ensureGitHubUser(profile);
-    c.header("Set-Cookie", sessionCookie(user.username, sessionSecret, c.req.url));
+    c.header(
+      "Set-Cookie",
+      sessionCookie(user.username, sessionSecret, c.req.url),
+    );
     clearOAuthStateCookies(c);
     return c.redirect(process.env.GITHUB_OAUTH_SUCCESS_REDIRECT || "/app", 302);
   });
@@ -93,7 +106,11 @@ export function registerAuthRoutes(
     const parsed = deviceStartInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid device start payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid device start payload",
+          parsed.error.issues,
+        ),
         400,
       );
     return c.json(repo.createDeviceCode(parsed.data));
@@ -110,7 +127,10 @@ export function registerAuthRoutes(
       return c.json(apiError("invalid_auth", "User session required"), 401);
     const result = repo.authorizeDeviceCode(userCode, username);
     if (!result)
-      return c.json(apiError("not_found", "Device code not found or expired"), 404);
+      return c.json(
+        apiError("not_found", "Device code not found or expired"),
+        404,
+      );
     return c.json(result);
   });
 
@@ -124,7 +144,10 @@ export function registerAuthRoutes(
     if (result.status === "expired")
       return c.json(apiError("expired_code", "Device code expired"), 410);
     if (result.status === "consumed")
-      return c.json(apiError("consumed_code", "Device code already consumed"), 409);
+      return c.json(
+        apiError("consumed_code", "Device code already consumed"),
+        409,
+      );
     return c.json(result);
   });
 }
@@ -135,7 +158,9 @@ function authUsername(c: Context) {
 
 function createPkcePair() {
   const codeVerifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(codeVerifier).digest("base64url");
+  const challenge = createHash("sha256")
+    .update(codeVerifier)
+    .digest("base64url");
   return { codeVerifier, challenge };
 }
 
@@ -154,11 +179,18 @@ async function exchangeGitHubCode(
   const response = await config.fetch(config.tokenUrl, {
     method: "POST",
     body,
-    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
   });
   if (!response.ok) return null;
-  const payload = (await response.json().catch(() => null)) as { access_token?: string } | null;
-  return typeof payload?.access_token === "string" ? payload.access_token : null;
+  const payload = (await response.json().catch(() => null)) as {
+    access_token?: string;
+  } | null;
+  return typeof payload?.access_token === "string"
+    ? payload.access_token
+    : null;
 }
 
 async function fetchGitHubProfile(
@@ -173,7 +205,9 @@ async function fetchGitHubProfile(
     },
   });
   if (!userResponse.ok) return null;
-  const user = (await userResponse.json().catch(() => null)) as GitHubUserResponse | null;
+  const user = (await userResponse
+    .json()
+    .catch(() => null)) as GitHubUserResponse | null;
   if (!user || !user.id || !user.login) return null;
   const profile: import("@toksync/db").GitHubUserProfile = {
     githubId: String(user.id),
@@ -187,7 +221,10 @@ async function fetchGitHubProfile(
   return profile;
 }
 
-async function fetchGitHubPrimaryEmail(config: GitHubOAuthConfig, token: string) {
+async function fetchGitHubPrimaryEmail(
+  config: GitHubOAuthConfig,
+  token: string,
+) {
   const response = await config.fetch(config.emailsUrl, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -196,7 +233,9 @@ async function fetchGitHubPrimaryEmail(config: GitHubOAuthConfig, token: string)
     },
   });
   if (!response.ok) return undefined;
-  const emails = (await response.json().catch(() => [])) as GitHubEmailResponse[];
+  const emails = (await response
+    .json()
+    .catch(() => [])) as GitHubEmailResponse[];
   return emails.find((e) => e.primary && e.verified)?.email;
 }
 

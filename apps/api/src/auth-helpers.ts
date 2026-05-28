@@ -1,4 +1,9 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import type { Context } from "hono";
 import { isValidUsername } from "@toksync/shared";
 
@@ -72,7 +77,11 @@ export function authMiddleware(devAuth: boolean, sessionSecret: string) {
   };
 }
 
-export function sessionCookie(username: string, secret: string, requestUrl: string) {
+export function sessionCookie(
+  username: string,
+  secret: string,
+  requestUrl: string,
+) {
   return serializeCookie(
     sessionCookieName(requestUrl),
     signSession(username, secret),

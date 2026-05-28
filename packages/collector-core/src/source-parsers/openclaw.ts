@@ -112,8 +112,18 @@ function openClawCandidate(
   if (!rawUsage) return null;
 
   const tokens = clampTokens({
-    input: numberValue(rawUsage.input, rawUsage.inputTokens, rawUsage.promptTokens) ?? 0,
-    output: numberValue(rawUsage.output, rawUsage.outputTokens, rawUsage.completionTokens) ?? 0,
+    input:
+      numberValue(
+        rawUsage.input,
+        rawUsage.inputTokens,
+        rawUsage.promptTokens,
+      ) ?? 0,
+    output:
+      numberValue(
+        rawUsage.output,
+        rawUsage.outputTokens,
+        rawUsage.completionTokens,
+      ) ?? 0,
     cacheRead: numberValue(rawUsage.cacheRead, rawUsage.cache_read) ?? 0,
     cacheWrite: numberValue(rawUsage.cacheWrite, rawUsage.cache_write) ?? 0,
     reasoning: numberValue(rawUsage.reasoning, rawUsage.reasoningTokens) ?? 0,
@@ -122,10 +132,18 @@ function openClawCandidate(
 
   const modelId =
     optionalString(
-      record.modelId, record.model_id, record.model,
-      message?.model, data?.modelId, data?.model_id, data?.model, payload?.model,
-      recordValue(record.runtime)?.model, recordValue(data?.runtime)?.model,
-      recordValue(record.params)?.model, recordValue(data?.params)?.model,
+      record.modelId,
+      record.model_id,
+      record.model,
+      message?.model,
+      data?.modelId,
+      data?.model_id,
+      data?.model,
+      payload?.model,
+      recordValue(record.runtime)?.model,
+      recordValue(data?.runtime)?.model,
+      recordValue(record.params)?.model,
+      recordValue(data?.params)?.model,
     ) ?? "unknown-model";
   const providerId =
     optionalString(record.provider, message?.provider, data?.provider) ??
@@ -133,10 +151,17 @@ function openClawCandidate(
   const timestampMs =
     parseTimestamp(
       optionalString(
-        record.ts, record.createdAt, record.updatedAt,
-        record.startedAt, record.endedAt,
+        record.ts,
+        record.createdAt,
+        record.updatedAt,
+        record.startedAt,
+        record.endedAt,
         message?.timestamp,
-        data?.ts, data?.createdAt, data?.updatedAt, data?.startedAt, data?.endedAt,
+        data?.ts,
+        data?.createdAt,
+        data?.updatedAt,
+        data?.startedAt,
+        data?.endedAt,
       ),
     ) ?? Date.now();
   const workspace =
@@ -144,14 +169,28 @@ function openClawCandidate(
   return {
     sourceSessionId:
       optionalString(
-        record.sourceSessionId, record.sessionId, record.session_id, record.sessionKey,
-        data?.sessionId, data?.session_id, data?.sessionKey,
-        record.runId, data?.runId, record.taskId, data?.taskId,
+        record.sourceSessionId,
+        record.sessionId,
+        record.session_id,
+        record.sessionKey,
+        data?.sessionId,
+        data?.session_id,
+        data?.sessionKey,
+        record.runId,
+        data?.runId,
+        record.taskId,
+        data?.taskId,
       ) ?? defaultSessionId,
     sourceMessageId:
       optionalString(
-        record.sourceMessageId, record.messageId, record.message_id, record.id,
-        message?.id, data?.id, record.seq, data?.seq,
+        record.sourceMessageId,
+        record.messageId,
+        record.message_id,
+        record.id,
+        message?.id,
+        data?.id,
+        record.seq,
+        data?.seq,
       ) ?? `openclaw:${index + 1}`,
     modelId,
     providerId,
@@ -201,7 +240,9 @@ function openClawTranscriptCandidate(
   if (!usage) return null;
   const tokens = clampTokens({
     input: numberValue(usage.input, usage.inputTokens, usage.promptTokens) ?? 0,
-    output: numberValue(usage.output, usage.outputTokens, usage.completionTokens) ?? 0,
+    output:
+      numberValue(usage.output, usage.outputTokens, usage.completionTokens) ??
+      0,
     cacheRead: numberValue(usage.cacheRead, usage.cache_read) ?? 0,
     cacheWrite: numberValue(usage.cacheWrite, usage.cache_write) ?? 0,
     reasoning: numberValue(usage.reasoning, usage.reasoningTokens) ?? 0,
@@ -214,12 +255,17 @@ function openClawTranscriptCandidate(
     inferProvider(modelId, "unknown");
   return {
     sourceSessionId: defaultSessionId,
-    sourceMessageId: optionalString(record.id, message.id) ?? `openclaw:${index + 1}`,
+    sourceMessageId:
+      optionalString(record.id, message.id) ?? `openclaw:${index + 1}`,
     modelId,
     providerId,
     timestampMs: parseTimestamp(message.timestamp) ?? Date.now(),
     tokens,
-    costUsd: numberValue(recordValue(usage.cost)?.total, usage.costUsd, usage.cost_usd),
+    costUsd: numberValue(
+      recordValue(usage.cost)?.total,
+      usage.costUsd,
+      usage.cost_usd,
+    ),
   };
 }
 

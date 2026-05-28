@@ -1,8 +1,16 @@
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { apiError, costGuardrailInputSchema, mergeIssueResolutionInputSchema } from "@toksync/shared";
+import {
+  apiError,
+  costGuardrailInputSchema,
+  mergeIssueResolutionInputSchema,
+} from "@toksync/shared";
 import { auditModelPricing } from "@toksync/pricing";
-import { CostGuardrailTargetError, type TokSyncRepository, type DashboardFilters } from "@toksync/db";
+import {
+  CostGuardrailTargetError,
+  type TokSyncRepository,
+  type DashboardFilters,
+} from "@toksync/db";
 
 export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
   app.get("/v1/dashboard/summary", (c) => {
@@ -14,7 +22,10 @@ export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
 
   app.get("/v1/dashboard/overview", (c) => {
     const username = authUsername(c);
-    const overview = repo.dashboardOverview(username, filtersFromUrl(c.req.url));
+    const overview = repo.dashboardOverview(
+      username,
+      filtersFromUrl(c.req.url),
+    );
     if (!overview) return c.json(apiError("not_found", "User not found"), 404);
     return c.json(overview);
   });
@@ -68,7 +79,8 @@ export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
   app.get("/v1/sync/receipts/:id", (c) => {
     const username = authUsername(c);
     const receipt = repo.getSyncReceipt(username, c.req.param("id"));
-    if (!receipt) return c.json(apiError("not_found", "Receipt not found"), 404);
+    if (!receipt)
+      return c.json(apiError("not_found", "Receipt not found"), 404);
     return c.json({ receipt });
   });
 
@@ -80,7 +92,8 @@ export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
   app.get("/v1/cost-guardrails", (c) => {
     const username = authUsername(c);
     const guardrails = repo.listCostGuardrails(username);
-    if (!guardrails) return c.json(apiError("not_found", "User not found"), 404);
+    if (!guardrails)
+      return c.json(apiError("not_found", "User not found"), 404);
     return c.json(guardrails);
   });
 
@@ -90,7 +103,11 @@ export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
     const parsed = costGuardrailInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid cost guardrail payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid cost guardrail payload",
+          parsed.error.issues,
+        ),
         400,
       );
     try {
@@ -114,11 +131,20 @@ export function registerDashboardRoutes(app: Hono, repo: TokSyncRepository) {
     const parsed = mergeIssueResolutionInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid merge resolution payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid merge resolution payload",
+          parsed.error.issues,
+        ),
         400,
       );
-    const result = repo.resolveMergeIssue(username, c.req.param("id"), parsed.data.action);
-    if (!result) return c.json(apiError("not_found", "Merge issue not found"), 404);
+    const result = repo.resolveMergeIssue(
+      username,
+      c.req.param("id"),
+      parsed.data.action,
+    );
+    if (!result)
+      return c.json(apiError("not_found", "Merge issue not found"), 404);
     return c.json(result);
   });
 

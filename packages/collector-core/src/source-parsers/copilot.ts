@@ -55,8 +55,16 @@ export async function parseCopilotOtel(
   const inferenceTraces = candidateSet(candidates, "inference", "traceId");
   const agentTurnTraces = candidateSet(candidates, "agent-turn", "traceId");
   const chatResponses = candidateSet(candidates, "chat", "responseId");
-  const inferenceResponses = candidateSet(candidates, "inference", "responseId");
-  const agentTurnResponses = candidateSet(candidates, "agent-turn", "responseId");
+  const inferenceResponses = candidateSet(
+    candidates,
+    "inference",
+    "responseId",
+  );
+  const agentTurnResponses = candidateSet(
+    candidates,
+    "agent-turn",
+    "responseId",
+  );
 
   return candidates
     .filter((candidate) =>
@@ -97,7 +105,9 @@ function copilotCandidateFromRecord(
   const sourceKind = copilotSourceKind(record, attributes);
   if (!sourceKind) return null;
 
-  const cacheRead = attributeNumber(attributes, ["gen_ai.usage.cache_read.input_tokens"]);
+  const cacheRead = attributeNumber(attributes, [
+    "gen_ai.usage.cache_read.input_tokens",
+  ]);
   const input = attributeNumber(attributes, ["gen_ai.usage.input_tokens"]);
   const tokens = clampTokens({
     input: Math.max(input - Math.min(input, cacheRead), 0),
@@ -195,12 +205,19 @@ function isSpanRecord(record: Record<string, unknown>) {
   if (type) return false;
   return Boolean(
     record.name &&
-    (record.spanId || record.traceId || record.startTime || record.endTime || record.kind),
+    (record.spanId ||
+      record.traceId ||
+      record.startTime ||
+      record.endTime ||
+      record.kind),
   );
 }
 
 function traceIdFromRecord(record: Record<string, unknown>) {
-  return optionalString(record.traceId, recordValue(record.spanContext)?.traceId);
+  return optionalString(
+    record.traceId,
+    recordValue(record.spanContext)?.traceId,
+  );
 }
 
 function spanIdFromRecord(record: Record<string, unknown>) {
@@ -215,7 +232,10 @@ function attributeNumber(attributes: Record<string, unknown>, names: string[]) {
   return 0;
 }
 
-function firstAttributeString(attributes: Record<string, unknown>, names: string[]) {
+function firstAttributeString(
+  attributes: Record<string, unknown>,
+  names: string[],
+) {
   for (const name of names) {
     const value = optionalString(attributes[name]);
     if (value) return value;
@@ -228,7 +248,9 @@ function bestSessionAttribute(attributes: Record<string, unknown>) {
     value: optionalString(attributes[name]),
     priority,
   }))
-    .filter((item): item is { value: string; priority: number } => Boolean(item.value))
+    .filter((item): item is { value: string; priority: number } =>
+      Boolean(item.value),
+    )
     .sort((a, b) => b.priority - a.priority)[0];
 }
 
@@ -326,7 +348,6 @@ function copilotTimestamp(record: Record<string, unknown>) {
   );
 }
 
-
 function timestampArray(value: unknown) {
   if (!Array.isArray(value) || value.length < 1) return undefined;
   const seconds = numberValue(value[0]);
@@ -340,4 +361,3 @@ function timestampUnixNano(value: unknown) {
   if (raw === undefined || raw < 0) return undefined;
   return Math.floor(raw / 1_000_000);
 }
-

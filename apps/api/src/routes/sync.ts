@@ -8,7 +8,10 @@ export function registerSyncRoutes(app: Hono, repo: TokSyncRepository) {
   app.get("/v1/sync/state", (c) => {
     const state = repo.getSyncState(bearerToken(c.req.raw));
     if (!state)
-      return c.json(apiError("invalid_auth", "Invalid or revoked device token"), 401);
+      return c.json(
+        apiError("invalid_auth", "Invalid or revoked device token"),
+        401,
+      );
     return c.json(state);
   });
 
@@ -22,6 +25,9 @@ export function registerSyncRoutes(app: Hono, repo: TokSyncRepository) {
   });
 
   app.post("/v1/sync/content-batch", (c) =>
-    c.json(apiError("feature_not_enabled", "Content sync is not available yet"), 501),
+    c.json(
+      apiError("feature_not_enabled", "Content sync is not available yet"),
+      501,
+    ),
   );
 }

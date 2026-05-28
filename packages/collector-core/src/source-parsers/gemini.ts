@@ -23,7 +23,13 @@ export function parseGeminiSession(
 ): UsageEventV1[] | null {
   const events: UsageEventV1[] = [];
   if (!parsed.jsonl && isRecord(parsed.root)) {
-    const directEvents = parseGeminiValue(parsed.root, fileId(ctx.file), undefined, 0, ctx);
+    const directEvents = parseGeminiValue(
+      parsed.root,
+      fileId(ctx.file),
+      undefined,
+      0,
+      ctx,
+    );
     if (directEvents.length > 0) return directEvents;
   }
 
@@ -44,10 +50,18 @@ export function parseGeminiSession(
     ) {
       sawGeminiShape = true;
     }
-    sessionId = optionalString(record.sessionId, record.session_id, sessionId) ?? sessionId;
+    sessionId =
+      optionalString(record.sessionId, record.session_id, sessionId) ??
+      sessionId;
     modelHint = optionalString(record.model, modelHint);
     if (eventType === "init") return;
-    const parsedEvents = parseGeminiValue(record, sessionId, modelHint, index, ctx);
+    const parsedEvents = parseGeminiValue(
+      record,
+      sessionId,
+      modelHint,
+      index,
+      ctx,
+    );
     for (const event of parsedEvents) {
       const id = optionalString(record.id);
       if (id) {
@@ -76,14 +90,26 @@ function parseGeminiValue(
     return sessionMessages
       .map((message, messageIndex) =>
         isRecord(message) && optionalString(message.type) === "gemini"
-          ? geminiEventFromTokenRecord(message, rootSessionId, optionalString(message.model, modelHint), messageIndex, ctx)
+          ? geminiEventFromTokenRecord(
+              message,
+              rootSessionId,
+              optionalString(message.model, modelHint),
+              messageIndex,
+              ctx,
+            )
           : null,
       )
       .filter((event): event is UsageEventV1 => Boolean(event));
   }
 
   if (optionalString(value.type) === "gemini" && isRecord(value.tokens)) {
-    const event = geminiEventFromTokenRecord(value, sessionId, modelHint, index, ctx);
+    const event = geminiEventFromTokenRecord(
+      value,
+      sessionId,
+      modelHint,
+      index,
+      ctx,
+    );
     return event ? [event] : [];
   }
 
@@ -116,11 +142,17 @@ function geminiEventFromTokenRecord(
   const input = numberValue(tokensRecord.input) ?? 0;
   const output = numberValue(tokensRecord.output) ?? 0;
   const cached = numberValue(tokensRecord.cached) ?? 0;
-  const reasoning = numberValue(tokensRecord.thoughts, tokensRecord.reasoning) ?? 0;
+  const reasoning =
+    numberValue(tokensRecord.thoughts, tokensRecord.reasoning) ?? 0;
   const tool = numberValue(tokensRecord.tool) ?? 0;
   const total = numberValue(tokensRecord.total);
   const [normalizedInput, cacheRead] = normalizeGeminiInput(
-    input, cached, output, reasoning, tool, total,
+    input,
+    cached,
+    output,
+    reasoning,
+    tool,
+    total,
   );
   const tokens = clampTokens({
     input: normalizedInput + Math.max(tool, 0),
@@ -154,15 +186,30 @@ function geminiEventsFromStats(
       .map(([modelId, modelStats], modelIndex) => {
         const tokenStats = recordValue(recordValue(modelStats)?.tokens);
         if (!tokenStats) return null;
-        const input = numberValue(tokenStats.prompt, tokenStats.input, tokenStats.input_tokens) ?? 0;
-        const cached = numberValue(tokenStats.cached, tokenStats.cached_tokens) ?? 0;
-        const [normalizedInput, cacheRead] = subtractCachedOverlap(input, cached);
+        const input =
+          numberValue(
+            tokenStats.prompt,
+            tokenStats.input,
+            tokenStats.input_tokens,
+          ) ?? 0;
+        const cached =
+          numberValue(tokenStats.cached, tokenStats.cached_tokens) ?? 0;
+        const [normalizedInput, cacheRead] = subtractCachedOverlap(
+          input,
+          cached,
+        );
         const tokens = clampTokens({
           input: normalizedInput,
-          output: numberValue(tokenStats.candidates, tokenStats.output, tokenStats.output_tokens) ?? 0,
+          output:
+            numberValue(
+              tokenStats.candidates,
+              tokenStats.output,
+              tokenStats.output_tokens,
+            ) ?? 0,
           cacheRead,
           cacheWrite: 0,
-          reasoning: numberValue(tokenStats.thoughts, tokenStats.reasoning) ?? 0,
+          reasoning:
+            numberValue(tokenStats.thoughts, tokenStats.reasoning) ?? 0,
         });
         if (tokenTotal(tokens) <= 0) return null;
         return usageEventFromCandidate(ctx, {
@@ -177,15 +224,23 @@ function geminiEventsFromStats(
       .filter((event): event is UsageEventV1 => Boolean(event));
   }
 
-  const input = numberValue(stats.input_tokens, stats.prompt_tokens, stats.input) ?? 0;
+  const input =
+    numberValue(stats.input_tokens, stats.prompt_tokens, stats.input) ?? 0;
   const cached = numberValue(stats.cached_tokens, stats.cached) ?? 0;
   const [normalizedInput, cacheRead] = subtractCachedOverlap(input, cached);
   const tokens = clampTokens({
     input: normalizedInput,
-    output: numberValue(stats.output_tokens, stats.candidates_tokens, stats.output) ?? 0,
+    output:
+      numberValue(stats.output_tokens, stats.candidates_tokens, stats.output) ??
+      0,
     cacheRead,
     cacheWrite: 0,
-    reasoning: numberValue(stats.thoughts_tokens, stats.reasoning_tokens, stats.reasoning) ?? 0,
+    reasoning:
+      numberValue(
+        stats.thoughts_tokens,
+        stats.reasoning_tokens,
+        stats.reasoning,
+      ) ?? 0,
   });
   if (tokenTotal(tokens) <= 0 || !modelHint) return [];
   return [
@@ -210,7 +265,10 @@ function normalizeGeminiInput(
 ): [number, number] {
   if (total === undefined) return [Math.max(input, 0), Math.max(cached, 0)];
   const inclusiveTotal =
-    Math.max(input, 0) + Math.max(output, 0) + Math.max(reasoning, 0) + Math.max(tool, 0);
+    Math.max(input, 0) +
+    Math.max(output, 0) +
+    Math.max(reasoning, 0) +
+    Math.max(tool, 0);
   const exclusiveTotal = inclusiveTotal + Math.max(cached, 0);
   if (cached > 0 && total === inclusiveTotal && total !== exclusiveTotal) {
     return subtractCachedOverlap(input, cached);

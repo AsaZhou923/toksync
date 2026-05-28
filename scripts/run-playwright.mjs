@@ -134,8 +134,6 @@ async function waitForUrl(url) {
   );
 }
 
-
-
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -175,8 +173,6 @@ function waitForChildrenToExit(childrenToWaitFor, timeoutMs) {
     }
   });
 }
-
-
 
 async function waitForPortsToClose(ports) {
   const deadline = Date.now() + 30_000;

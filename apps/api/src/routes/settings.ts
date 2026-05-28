@@ -14,7 +14,11 @@ export function registerSettingsRoutes(app: Hono, repo: TokSyncRepository) {
     const parsed = userApiTokenInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid token creation payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid token creation payload",
+          parsed.error.issues,
+        ),
         400,
       );
     return c.json(repo.createUserApiToken(username, parsed.data), 201);

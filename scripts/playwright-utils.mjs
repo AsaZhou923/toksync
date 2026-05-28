@@ -21,7 +21,9 @@ export function quoteArg(value) {
 export function killProcessTree(pid) {
   if (!pid) return;
   if (IS_WIN) {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
     return;
   }
   try {

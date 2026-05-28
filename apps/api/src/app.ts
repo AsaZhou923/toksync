@@ -122,7 +122,8 @@ function resolveGitHubOAuth(
   overrides: Partial<GitHubOAuthConfig> | undefined,
 ): GitHubOAuthConfig | null {
   const clientId = overrides?.clientId ?? process.env.GITHUB_CLIENT_ID;
-  const clientSecret = overrides?.clientSecret ?? process.env.GITHUB_CLIENT_SECRET;
+  const clientSecret =
+    overrides?.clientSecret ?? process.env.GITHUB_CLIENT_SECRET;
   const redirectUri =
     overrides?.redirectUri ??
     process.env.GITHUB_REDIRECT_URI ??
@@ -132,8 +133,10 @@ function resolveGitHubOAuth(
     clientId,
     clientSecret,
     redirectUri,
-    authorizeUrl: overrides?.authorizeUrl ?? "https://github.com/login/oauth/authorize",
-    tokenUrl: overrides?.tokenUrl ?? "https://github.com/login/oauth/access_token",
+    authorizeUrl:
+      overrides?.authorizeUrl ?? "https://github.com/login/oauth/authorize",
+    tokenUrl:
+      overrides?.tokenUrl ?? "https://github.com/login/oauth/access_token",
     userUrl: overrides?.userUrl ?? "https://api.github.com/user",
     emailsUrl: overrides?.emailsUrl ?? "https://api.github.com/user/emails",
     fetch: overrides?.fetch ?? fetch,

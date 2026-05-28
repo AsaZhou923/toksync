@@ -1,6 +1,18 @@
 import type { Context, Hono } from "hono";
-import { apiError, isValidUsername, leaderboardOptInInputSchema, normalizeUsername, publicProfileInputSchema } from "@toksync/shared";
-import { renderBadgeSvg, renderProfileCardSvg, renderShareImageSvg, type BadgeOptions, type PublicEmbedStats } from "@toksync/embed-renderer";
+import {
+  apiError,
+  isValidUsername,
+  leaderboardOptInInputSchema,
+  normalizeUsername,
+  publicProfileInputSchema,
+} from "@toksync/shared";
+import {
+  renderBadgeSvg,
+  renderProfileCardSvg,
+  renderShareImageSvg,
+  type BadgeOptions,
+  type PublicEmbedStats,
+} from "@toksync/embed-renderer";
 import type { TokSyncRepository } from "@toksync/db";
 
 export function registerPublicRoutes(app: Hono, repo: TokSyncRepository) {
@@ -9,7 +21,11 @@ export function registerPublicRoutes(app: Hono, repo: TokSyncRepository) {
     const parsed = publicProfileInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid public profile payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid public profile payload",
+          parsed.error.issues,
+        ),
         400,
       );
     const username = authUsername(c);
@@ -37,7 +53,11 @@ export function registerPublicRoutes(app: Hono, repo: TokSyncRepository) {
     const parsed = leaderboardOptInInputSchema.safeParse(body);
     if (!parsed.success)
       return c.json(
-        apiError("invalid_payload", "Invalid leaderboard opt-in payload", parsed.error.issues),
+        apiError(
+          "invalid_payload",
+          "Invalid leaderboard opt-in payload",
+          parsed.error.issues,
+        ),
         400,
       );
     const result = repo.setLeaderboardOptIn(username, parsed.data);
@@ -48,7 +68,10 @@ export function registerPublicRoutes(app: Hono, repo: TokSyncRepository) {
         409,
       );
     }
-    return c.json({ enabled: result.enabled, nextSnapshotAt: result.nextSnapshotAt });
+    return c.json({
+      enabled: result.enabled,
+      nextSnapshotAt: result.nextSnapshotAt,
+    });
   });
 
   app.get("/v1/public-proof/:username", (c) => {
@@ -197,7 +220,9 @@ function publicStatsToEmbed(
 }
 
 function publicBreakdownForEmbed(
-  rows: NonNullable<ReturnType<TokSyncRepository["getPublicStats"]>>["topSources"],
+  rows: NonNullable<
+    ReturnType<TokSyncRepository["getPublicStats"]>
+  >["topSources"],
   showCost: boolean,
 ) {
   return rows.map((row) => ({
@@ -257,9 +282,11 @@ function svgResponse(svg: string, status = 200) {
     status,
     headers: {
       "Content-Type": "image/svg+xml; charset=utf-8",
-      "Cache-Control": "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
+      "Cache-Control":
+        "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline';",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline';",
     },
   });
 }
