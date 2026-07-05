@@ -12,7 +12,7 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
-  "img-src 'self' data: https:",
+  `img-src 'self' data: https: ${apiOrigin} http://localhost:4000 http://127.0.0.1:4000`,
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   `script-src 'self' 'unsafe-inline'${devScriptPolicy}`,

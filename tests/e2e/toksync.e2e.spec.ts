@@ -188,7 +188,7 @@ test.describe("TokSync local agent flow", () => {
 });
 
 async function runPnpm(args: string[]) {
-  return execAsync(["pnpm", ...args.map(quoteArg)].join(" "), {
+  return execAsync([pnpmCommand(), ...args.map(quoteArg)].join(" "), {
     cwd: rootDir,
     maxBuffer: 1024 * 1024 * 8,
     env: {
@@ -198,6 +198,10 @@ async function runPnpm(args: string[]) {
       TOKSYNC_CONFIG_DIR: configDir,
     },
   });
+}
+
+function pnpmCommand() {
+  return process.platform === "win32" ? "corepack pnpm" : "pnpm";
 }
 
 function quoteArg(value: string) {

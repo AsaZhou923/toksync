@@ -2,6 +2,79 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-07-05-playwright-windows-csp-hardening"></a>
+
+## 2026-07-05 - Playwright Windows CSP hardening
+
+Date: 2026-07-05
+
+This update makes the Playwright verification loop reliable in the current Windows/Codex environment and fixes local README SVG previews that were blocked by the web Content Security Policy.
+
+## Overview
+
+- Web CSP now allows the configured API origin for SVG image previews while keeping script execution blocked.
+- Playwright helper subprocesses use `corepack pnpm` on Windows so they respect the repository `packageManager` pin.
+- Root Turbo scripts run through a small wrapper that places a `corepack pnpm` shim first on PATH for child tasks.
+- The E2E agent command helper now uses `corepack pnpm` on Windows.
+- A Playwright deep-test report was produced in the external TokSync reviews area.
+
+## User-visible changes
+
+- README badge, profile-card, and share-image previews can render from the local API origin during development and Playwright runs.
+- Local E2E, visual, typecheck, and lint commands are less likely to fail because of a globally installed pnpm version.
+
+## Web / Embed
+
+- `apps/web/next.config.mjs` adds the configured API origin plus default local API origins to `img-src`.
+- `apps/web/next.config.test.ts` adds a regression test for API-backed SVG preview origins.
+
+## Tooling / Verification
+
+- `scripts/playwright-utils.mjs` routes Windows Playwright helper pnpm calls through `corepack pnpm`.
+- `scripts/run-turbo.mjs` wraps Turbo with a temporary pnpm shim so Turbo child tasks do not resolve the wrong pnpm binary from PATH.
+- Root `package.json` routes `dev`, `build`, `lint`, and `typecheck` through the Turbo wrapper and uses `corepack pnpm` for nested workspace scripts.
+- `tests/e2e/toksync.e2e.spec.ts` uses `corepack pnpm` for agent CLI subprocesses on Windows.
+
+## Privacy / Public Data
+
+- No payload schema, API contract, storage data shape, collector behavior, or public/private data boundary changed.
+- Public SVG endpoints and public JSON surfaces were rechecked in Playwright using synthetic metrics-only data; no synthetic private identifiers were found in public outputs.
+
+## Documentation sync
+
+- Added the external Playwright deep-test report under the TokSync reviews documentation area.
+- Synchronized this changelog to the external Update Logs mirror.
+
+## Impacted files
+
+### Apps
+
+- `apps/web/next.config.mjs`
+- `apps/web/next.config.test.ts`
+
+### Scripts / Tests
+
+- `package.json`
+- `scripts/playwright-utils.mjs`
+- `scripts/run-turbo.mjs`
+- `tests/e2e/toksync.e2e.spec.ts`
+
+### Docs
+
+- `docs/changelog/CHANGELOG.md`
+
+## Verification
+
+- Passed: `corepack pnpm exec vitest run apps/web/next.config.test.ts`
+- Passed: `corepack pnpm test:e2e`
+- Passed: `corepack pnpm test:visual`
+- Passed: supplemental Playwright deep audit, 255 checks / 0 failures / 0 warnings
+- Passed: `corepack pnpm test`
+- Passed: `corepack pnpm --filter @toksync/web typecheck`
+- Passed: `corepack pnpm typecheck`
+- Passed: `corepack pnpm lint`
+- Passed: `corepack pnpm test:full`
+
 <a id="2026-05-28-codebase-optimization"></a>
 
 ## 2026-05-28 - Codebase optimization

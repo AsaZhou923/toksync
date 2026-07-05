@@ -1,17 +1,30 @@
 import { spawn, spawnSync } from "node:child_process";
 
 const IS_WIN = process.platform === "win32";
+const PNPM_RUNNER =
+  process.env.TOKSYNC_PLAYWRIGHT_PNPM_RUNNER ?? (IS_WIN ? "corepack" : "pnpm");
 
 export function command() {
-  return IS_WIN ? "cmd.exe" : "pnpm";
+  if (IS_WIN) return "cmd.exe";
+  return PNPM_RUNNER === "corepack" ? "corepack" : "pnpm";
 }
 
 export function commandArgs(args) {
   // args already includes "pnpm" as the first element (e.g. ["pnpm", "exec", "playwright", ...])
-  // On Unix: strip "pnpm", pass the rest to pnpm directly
+  // On Unix: strip "pnpm", pass the rest to pnpm/corepack directly
   // On Windows: wrap the whole thing in cmd.exe
-  if (!IS_WIN) return args.slice(1);
-  return ["/d", "/s", "/c", args.map(quoteArg).join(" ")];
+  const commandLine = normalizePnpmArgs(args);
+  if (!IS_WIN) {
+    return PNPM_RUNNER === "corepack" && args[0] === "pnpm"
+      ? ["pnpm", ...args.slice(1)]
+      : commandLine.slice(1);
+  }
+  return ["/d", "/s", "/c", commandLine.map(quoteArg).join(" ")];
+}
+
+function normalizePnpmArgs(args) {
+  if (args[0] !== "pnpm" || PNPM_RUNNER !== "corepack") return args;
+  return ["corepack", "pnpm", ...args.slice(1)];
 }
 
 export function quoteArg(value) {
