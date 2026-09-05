@@ -1,7 +1,7 @@
 # TokSync Agent Guide
 
 This guide is based on the project notes in `E:\Project Code\docs\01 - Projects\TokSync`
-and the repository state in `E:\Project Code\toksync` as of 2026-05-16.
+and the repository state in `E:\Project Code\toksync` as of 2026-09-05.
 
 When docs and code disagree, use this rule:
 
@@ -35,7 +35,7 @@ The v0.1 loop is:
 - Never include prompt text, assistant response text, tool arguments, tool output, file content, secrets, raw absolute project paths, source session details, or message text in public output.
 - Public profile is opt-in. README badge/profile-card data must come only from public aggregate state, not private raw events.
 - Leaderboard is not v0.1. If touched, it must remain opt-in and read only public aggregate state; later snapshots may be derived from that public state.
-- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, the opt-in leaderboard, Private Usage Vault, Public Proof Pack, and Wrapped are current v0.2-v0.5 implementation surfaces. Content sync/search/eval remain planned differentiators unless the product scope is explicitly changed.
+- Merge Copilot, Sync Privacy Receipt, Source Health Radar, Cost Guardrails, the opt-in leaderboard, Private Usage Vault, Public Proof Pack, Wrapped, public share SVG, CLI reports, and user API tokens are current implementation surfaces. Content sync/search/eval remain planned differentiators unless the product scope is explicitly changed.
 - Billing, subscription plans, payment providers, paid limits, and billing UI are out of scope for v0.1.
 - Cost estimates are approximate; do not present them as provider billing truth.
 - Device fingerprinting must not use hostname, MAC address, OS machine id, username, home path, or project path. It should derive from a local random seed and server-side pepper.
@@ -45,10 +45,10 @@ The v0.1 loop is:
 - Package manager: `pnpm@9.15.9`.
 - Runtime stack: TypeScript, Node 22-style ESM, Turbo, Vitest, Playwright.
 - Apps:
-  - `apps/agent`: Commander CLI with `login`, `logout`, `status`, `sources list`, and `sync`.
-  - `apps/api`: Hono API with device login, sync ingestion, dashboard queries, device revoke/delete, receipts, source health, merge, export, cost guardrails, public profile, public proof, wrapped summary/card, badge, embed, and opt-in leaderboard routes. Route handlers are organized by domain under `apps/api/src/routes/` (auth, sync, dashboard, devices, settings, public, vault). Shared auth helpers live in `apps/api/src/auth-helpers.ts`.
-  - `apps/web`: Next.js app for landing, dashboard, docs, device auth, source health, receipts, merge, cost guardrails, leaderboard settings, public profile, embed settings, Proof Pack, and Wrapped.
-  - `apps/worker`: lightweight worker/health surface; rollup work is currently synchronous in the repository layer.
+  - `apps/agent`: Commander CLI with `login`, `logout`, sanitized `status`, `sources list`, `report models/sources/daily/monthly/hourly`, preview-confirm `sync`, `--yes`, dry-run, and user API token headless mode.
+  - `apps/api`: Hono API with 48 `/v1` route handlers plus `GET /health`, for 49 registered handlers/surfaces total. Route handlers are organized by domain under `apps/api/src/routes/` (auth, sync, dashboard, devices, settings, public, vault). Shared auth helpers live in `apps/api/src/auth-helpers.ts`.
+  - `apps/web`: Next.js app whose authenticated primary navigation is Dashboard, Sync, Sources, Share, and Settings. Sixteen legacy authenticated URLs redirect with query preservation into those hubs or their advanced tabs.
+  - `apps/worker`: optional lightweight worker/health surface; root `pnpm dev` no longer starts it. Rollup work is currently synchronous in the repository layer.
 - Packages:
   - `packages/shared`: Zod schemas, source registry, formatting, and shared errors.
   - `packages/collector-core`: source discovery, JSON/JSONL parsing, normalization to `UsageEventV1`.
@@ -57,7 +57,8 @@ The v0.1 loop is:
   - `packages/db`: repository, local JSON store, data types, seed/reset/migrate scripts, and forward SQL migration.
   - `packages/embed-renderer`: SVG badge and profile-card rendering.
 - Current local persistence is `FileTokSyncStore`, defaulting to `.tmp/toksync-dev.json` or `TOKSYNC_DB_FILE`.
-- A Postgres migration exists in `packages/db/migrations/0001_v0_1_metrics.sql`, but the active dev repository path is still file-backed unless code proves otherwise.
+- A Postgres migration exists in `packages/db/migrations/0001_v0_1_metrics.sql`, but the active dev repository path is still file-backed unless code proves otherwise. No Postgres switch, hosted deploy, production migration, or worker queue is part of the 2026-09-04 simplification.
+- S6 API/repository cleanup is audit-only unless external-use uncertainty is resolved. All 48 `/v1` route handlers plus `GET /health` currently have Keep/Deprecate/Remove decisions: `GET /health` and public/auth/sync/core/advanced current routes stay Keep, `POST /v1/sync/content-batch` stays Keep-disabled, `POST /v1/local/preview` is Deprecate, and Remove is none. `TokSyncRepository` has 45 public methods audited; `reset` and `authenticateUserApiToken` are dead-code candidates, and `ensureUser` is a privatize candidate, but do not remove them without external-use evidence and tests.
 - The repo may be in a broad untracked or dirty state. Always check `git status --short` before editing and do not revert user changes.
 
 ## Source Of Truth Files
@@ -92,7 +93,7 @@ The v0.1 loop is:
 
 Keep these stable unless the change is intentional and documented:
 
-- Built-in sources: `codex`, `claude`, `opencode`.
+- Built-in sources: `codex`, `claude`, `opencode`, `cursor`, `copilot`, `gemini`, `openclaw`.
 - `UsageEventV1` must include `schemaVersion`, `source`, source session/message identifiers, `dedupKey`, `deviceId`, optional workspace hash/label, `modelId`, optional provider, timestamps, token breakdown, optional cost, message count, and turn marker.
 - `UsageBatchV1` must include `schemaVersion`, `runId`, device metadata, `mode`, source versions, and max 10,000 events.
 - Sync idempotency depends on `(user_id, source, dedup_key)` semantics. Any adapter change must preserve stable dedup keys and include replay tests.
@@ -131,14 +132,14 @@ Default local services:
 
 - Web: `http://localhost:3000`
 - API: `http://localhost:4000`
-- Worker health: `http://localhost:4100`
+- Worker health: `http://localhost:4100` only after `pnpm dev:worker`
 
 Useful agent loop:
 
 ```bash
 pnpm agent login --auto-authorize demo
 pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic
-pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+pnpm agent sync --fixture ./packages/test-fixtures/codex/basic --yes
 ```
 
 For isolated agent config during development:
@@ -157,15 +158,26 @@ run the full chain.
 
 ```bash
 pnpm format:check
+pnpm check:boundaries
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
 pnpm test:e2e
+pnpm test:e2e:hosted
 pnpm test:visual
 pnpm test:perf
 pnpm test:full
+pnpm audit --prod
 ```
+
+Production dependency changes also require `pnpm audit --prod`. The root pnpm overrides for Next's PostCSS, nanoid, and sharp dependencies close known advisories; recheck the audit and browser/build behavior before removing them. CI includes hosted-session E2E and stores failed Playwright artifacts under `output/playwright/runs/`.
+
+Use `pnpm test:e2e`, `pnpm test:e2e:hosted`, and `pnpm test:visual` instead of
+direct concurrent `playwright test` for normal browser verification. The
+wrappers create run-specific ports, JSON store, agent config, Next output, and
+Playwright output paths. Direct concurrent Playwright is unsupported unless the
+caller provides isolated `TOKSYNC_PLAYWRIGHT_*` paths and ports.
 
 Expected coverage by change type:
 
@@ -173,7 +185,7 @@ Expected coverage by change type:
 - Collector changes: fixture tests, snapshot updates only when the new output is intentionally changed, privacy assertions, and dry-run against synthetic fixtures.
 - Repository/storage changes: idempotency, replay, wrong-device, revoke, delete, rollup recompute, and public stats tests.
 - SVG/embed changes: renderer tests plus Playwright visual sanity checks or pixel checks.
-- Web UI changes: `pnpm --filter @toksync/web typecheck`, `pnpm build`, and Playwright/browser verification for affected flows.
+- Web UI changes: `pnpm --filter @toksync/web typecheck`, `pnpm build`, and Playwright/browser verification for affected flows. Auth/session-sensitive changes should include `pnpm test:e2e:hosted`.
 - Agent CLI changes: dry-run and sync fixture loop, status/logout behavior, token/revoke failure path.
 
 Do not claim completion from a build alone when the change affects UI, sync behavior,
@@ -284,4 +296,5 @@ Before reporting done:
 - Existing behavior is not accidentally widened beyond v0.1 scope.
 - Targeted tests or checks have run and their results are known.
 - Browser/Playwright verification has run for user-visible UI or SVG changes.
+- `pnpm dev` starts only Web and API; use `pnpm dev:worker` for the optional worker health surface.
 - `git status --short` has been checked so the final report can separate your changes from pre-existing work.

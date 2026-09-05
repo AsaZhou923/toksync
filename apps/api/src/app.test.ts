@@ -1,9 +1,17 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { FileTokSyncStore, TokSyncRepository } from "@toksync/db";
-import type { UsageBatchV1, UsageEventV1 } from "@toksync/shared";
+import { describe, expect, it, vi } from "vitest";
+import {
+  FileTokSyncStore,
+  TokSyncRepository,
+  type TokSyncData,
+} from "@toksync/db";
+import {
+  SOURCE_REGISTRY,
+  type UsageBatchV1,
+  type UsageEventV1,
+} from "@toksync/shared";
 import { createApiApp } from "./app";
 
 function testContext() {
@@ -12,6 +20,30 @@ function testContext() {
     new FileTokSyncStore(path.join(dir, "db.json")),
   );
   return { api: createApiApp({ repo, devAuth: true }), repo };
+}
+
+class TrackingFileStore extends FileTokSyncStore {
+  writes = 0;
+  transactions = 0;
+
+  override write(data?: TokSyncData) {
+    this.writes += 1;
+    return super.write(data);
+  }
+
+  override transaction<T>(
+    operation: (data: TokSyncData) => { result: T; commit: boolean },
+  ): T {
+    this.transactions += 1;
+    return super.transaction(operation);
+  }
+}
+
+function trackingContext() {
+  const dir = mkdtempSync(path.join(tmpdir(), "toksync-api-tracking-"));
+  const store = new TrackingFileStore(path.join(dir, "db.json"));
+  const repo = new TokSyncRepository(store);
+  return { api: createApiApp({ repo, devAuth: true }), repo, store };
 }
 
 function lockedContext(options: Parameters<typeof createApiApp>[0] = {}) {
@@ -501,6 +533,168 @@ describe("TokSync API", () => {
       }),
     );
     expect(afterDelete.totals.tokens).toBe(0);
+  });
+
+  it("returns compact dashboard status in overview without extra dashboard endpoints", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const { api } = testContext();
+      const auth = await connectDevice(api);
+      const partialPayload = usageBatch(
+        auth.deviceId,
+        [
+          usageEvent(auth.deviceId, {
+            dedupKey: "codex:overview-status-valid",
+            sourceMessageId: "overview-status-valid",
+          }),
+          usageEvent("other-device", {
+            dedupKey: "codex:overview-status-wrong-device",
+            sourceMessageId: "overview-status-wrong-device",
+          }),
+        ],
+        "overview-status-run",
+      );
+
+      const synced = await json<any>(
+        await postBatch(api, auth.deviceToken, partialPayload),
+      );
+      const overview = await json<any>(
+        await api.request("/v1/dashboard/overview", {
+          headers: { "X-TokSync-User": "demo" },
+        }),
+      );
+
+      expect(synced).toMatchObject({
+        status: "accepted",
+        inserted: 1,
+        errors: [{ code: "wrong_device" }],
+      });
+      expect(overview.status.state).toBe("needs_attention");
+      expect(overview.status.latestRun).toMatchObject({
+        clientRunId: "overview-status-run",
+        status: "partial",
+        insertedCount: 1,
+        errorCount: 1,
+      });
+      expect(overview.status.counts).toMatchObject({
+        latestRunErrors: 1,
+        mergeIssues: 0,
+      });
+      expect(overview.status.counts.sourceHealthIssues).toBe(0);
+      expect(overview.status.totalIssues).toBe(
+        overview.status.counts.latestRunErrors +
+          overview.status.counts.mergeIssues +
+          overview.status.counts.sourceHealthIssues,
+      );
+      expect(overview.summary.totals.tokens).toBe(157);
+      expect(overview.daily.days).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serves dashboard overview and source health without GET writes", async () => {
+    const { api, store } = trackingContext();
+    const auth = await connectDevice(api);
+    await postBatch(
+      api,
+      auth.deviceToken,
+      usageBatch(auth.deviceId, [
+        usageEvent(auth.deviceId, {
+          dedupKey: "codex:http-read-only-health",
+          sourceMessageId: "http-read-only-health",
+        }),
+      ]),
+    );
+    const before = {
+      transactions: store.transactions,
+      writes: store.writes,
+      sourceHealthSnapshots: store.read().sourceHealthSnapshots,
+    };
+
+    expect(
+      (
+        await api.request("/v1/dashboard/overview", {
+          headers: { "X-TokSync-User": "demo" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await api.request("/v1/source-health", {
+          headers: { "X-TokSync-User": "demo" },
+        })
+      ).status,
+    ).toBe(200);
+
+    expect(store.transactions).toBe(before.transactions);
+    expect(store.writes).toBe(before.writes);
+    expect(store.read().sourceHealthSnapshots).toEqual(
+      before.sourceHealthSnapshots,
+    );
+  });
+
+  it("refreshes compact source health in overview after read-only time advances", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const { api } = testContext();
+      const auth = await connectDevice(api);
+      const payload = usageBatch(
+        auth.deviceId,
+        SOURCE_REGISTRY.map((source, index) =>
+          usageEvent(auth.deviceId, {
+            source: source.id,
+            sourceSessionId: `overview-stale-${source.id}-session`,
+            sourceMessageId: `overview-stale-${source.id}-message`,
+            dedupKey: `${source.id}:overview-stale-${index}`,
+            timestampMs: Date.parse("2026-02-03T12:00:00.000Z"),
+          }),
+        ),
+        "overview-stale-run",
+      );
+
+      await postBatch(api, auth.deviceToken, payload);
+
+      const initialOverview = await json<any>(
+        await api.request("/v1/dashboard/overview", {
+          headers: { "X-TokSync-User": "demo" },
+        }),
+      );
+      expect(initialOverview.status).toMatchObject({
+        state: "healthy",
+        counts: {
+          latestRunErrors: 0,
+          mergeIssues: 0,
+          sourceHealthIssues: 0,
+        },
+      });
+
+      vi.setSystemTime(new Date("2026-02-11T13:00:00.000Z"));
+
+      const staleOverview = await json<any>(
+        await api.request("/v1/dashboard/overview", {
+          headers: { "X-TokSync-User": "demo" },
+        }),
+      );
+
+      expect(staleOverview.status).toMatchObject({
+        state: "needs_attention",
+        latestRun: {
+          clientRunId: "overview-stale-run",
+          status: "completed",
+        },
+        counts: {
+          latestRunErrors: 0,
+          mergeIssues: 0,
+          sourceHealthIssues: SOURCE_REGISTRY.length,
+        },
+        totalIssues: SOURCE_REGISTRY.length,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects invalid tokens, revoked devices and invalid schemas", async () => {
@@ -1535,7 +1729,11 @@ describe("TokSync API", () => {
       api,
       auth.deviceToken,
       usageBatch(auth.deviceId, [
-        usageEvent(auth.deviceId, { dedupKey: "codex:submitted-data" }),
+        usageEvent(auth.deviceId, {
+          dedupKey: "codex:submitted-data",
+          workspaceKeyHash: "sha256:submitted-data-workspace",
+          workspaceLabel: "private-after-delete",
+        }),
       ]),
     );
     await api.request("/v1/public-profile", {
@@ -1545,6 +1743,7 @@ describe("TokSync API", () => {
         showCost: true,
         showSourceBreakdown: true,
         showModelBreakdown: true,
+        showWorkspaceBreakdown: true,
       }),
       headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
     });
@@ -1561,6 +1760,11 @@ describe("TokSync API", () => {
     const publicProfile = await json<any>(
       await api.request("/v1/public-profile/demo"),
     );
+    const privateProfile = await json<any>(
+      await api.request("/v1/public-profile", {
+        headers: { "X-TokSync-User": "demo" },
+      }),
+    );
     const privateSummary = await json<any>(
       await api.request("/v1/dashboard/summary", {
         headers: { "X-TokSync-User": "demo" },
@@ -1573,6 +1777,24 @@ describe("TokSync API", () => {
       leaderboardOptIn: false,
     });
     expect(publicProfile.enabled).toBe(false);
+    expect(privateProfile).toMatchObject({
+      enabled: false,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      showWorkspaceBreakdown: false,
+    });
     expect(privateSummary.totals.tokens).toBe(157);
+
+    await api.request("/v1/public-profile", {
+      method: "POST",
+      body: JSON.stringify({ ...privateProfile, enabled: true }),
+      headers: { "Content-Type": "application/json", "X-TokSync-User": "demo" },
+    });
+    const republishedProfile = await json<any>(
+      await api.request("/v1/public-profile/demo"),
+    );
+    expect(republishedProfile.profile.showWorkspaceBreakdown).toBe(false);
+    expect(republishedProfile.profile.topWorkspaces).toEqual([]);
   });
 });

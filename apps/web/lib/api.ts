@@ -60,6 +60,19 @@ export interface UsageDailyResponse {
 export interface DashboardOverview {
   summary: DashboardSummary;
   daily: UsageDailyResponse;
+  status: DashboardCompactStatus;
+}
+
+export interface DashboardCompactStatus {
+  state: "waiting_for_sync" | "healthy" | "needs_attention";
+  lastSyncAt?: string;
+  latestRun: SyncRun | null;
+  counts: {
+    latestRunErrors: number;
+    mergeIssues: number;
+    sourceHealthIssues: number;
+  };
+  totalIssues: number;
 }
 
 export interface SyncRun {
@@ -440,7 +453,10 @@ export async function currentUsername() {
   const session = await apiGet<AuthSessionResponse>("/v1/auth/session", {
     notFoundAsNull: false,
   });
-  return session?.user.username ?? USER;
+  if (!session?.user.username) {
+    throw new Error("TokSync account session is required");
+  }
+  return session.user.username;
 }
 
 export async function optionalCurrentUsername() {

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { formatUsd } from "@toksync/shared";
+import { useState } from "react";
+import { formatUsd, SOURCE_REGISTRY } from "@toksync/shared";
 import {
   AlertTriangle,
   EyeOff,
@@ -17,8 +17,7 @@ import type {
   CostGuardrailScope,
   CostGuardrailUpsertInput,
 } from "../lib/api";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { clientApiFetch } from "../lib/client-api";
 
 const SCOPE_OPTIONS: Array<{ value: CostGuardrailScope; label: string }> = [
   { value: "global", label: "All usage" },
@@ -33,11 +32,10 @@ const PERIOD_OPTIONS: Array<{ value: CostGuardrailPeriod; label: string }> = [
   { value: "monthly", label: "Month" },
 ];
 
-const SOURCE_OPTIONS = [
-  { value: "codex", label: "Codex" },
-  { value: "claude", label: "Claude Code" },
-  { value: "opencode", label: "OpenCode" },
-];
+const SOURCE_OPTIONS = SOURCE_REGISTRY.map((source) => ({
+  value: source.id,
+  label: source.displayName,
+}));
 
 type NoticeTone = "good" | "warn" | "stop";
 
@@ -70,7 +68,7 @@ export function CostGuardrailsConsole({
           text: "The connected API did not serve the v0.3 cost guardrails contract. Check the API version before saving rules.",
         },
   );
-  const [isPending, startTransition] = useTransition();
+  const [pending, setPending] = useState(false);
 
   const activeRules = rules.filter((rule) => rule.enabled).length;
   const criticalAnomalies = anomalies.filter(
@@ -118,19 +116,25 @@ export function CostGuardrailsConsole({
     return payload;
   }
 
-  function saveRule() {
+  async function saveRule() {
+    if (pending) return;
     const payload = buildPayload();
     if (!payload || !available) return;
 
-    startTransition(async () => {
-      const response = await fetch(`${API_URL}/v1/cost-guardrails`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-        headers: {
-          "Content-Type": "application/json",
-          "X-TokSync-User": username,
+    setPending(true);
+    setNotice({ tone: "warn", text: "Saving guardrail..." });
+    try {
+      const response = await clientApiFetch(
+        "/v1/cost-guardrails",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      });
+        username,
+      );
       const result = await response.json().catch(() => null);
 
       if (!response.ok) {
@@ -162,7 +166,14 @@ export function CostGuardrailsConsole({
         tone: "good",
         text: "Guardrail saved. Private rollups can now evaluate this rule.",
       });
-    });
+    } catch {
+      setNotice({
+        tone: "stop",
+        text: "Guardrail save failed. Check your connection and try again.",
+      });
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
@@ -191,6 +202,7 @@ export function CostGuardrailsConsole({
                     key={option.value}
                     className={`segmented ${scope === option.value ? "active" : ""}`}
                     type="button"
+                    disabled={pending}
                     onClick={() => setScope(option.value)}
                   >
                     {option.label}
@@ -212,6 +224,7 @@ export function CostGuardrailsConsole({
                 <select
                   className="input"
                   value={source}
+                  disabled={pending}
                   onChange={(event) => setSource(event.target.value)}
                 >
                   {SOURCE_OPTIONS.map((option) => (
@@ -226,6 +239,7 @@ export function CostGuardrailsConsole({
                   type="text"
                   placeholder={scope === "model" ? "gpt-5.4" : "device id"}
                   value={scope === "model" ? modelId : deviceId}
+                  disabled={pending}
                   onChange={(event) =>
                     scope === "model"
                       ? setModelId(event.target.value)
@@ -242,6 +256,7 @@ export function CostGuardrailsConsole({
                     key={option.value}
                     className={`segmented ${period === option.value ? "active" : ""}`}
                     type="button"
+                    disabled={pending}
                     onClick={() => setPeriod(option.value)}
                   >
                     {option.label}
@@ -258,6 +273,7 @@ export function CostGuardrailsConsole({
                 min="0"
                 step="0.01"
                 value={limitUsd}
+                disabled={pending}
                 onChange={(event) => setLimitUsd(event.target.value)}
               />
             </div>
@@ -267,6 +283,7 @@ export function CostGuardrailsConsole({
             <input
               type="checkbox"
               checked={enabled}
+              disabled={pending}
               onChange={(event) => setEnabled(event.target.checked)}
             />
           </label>
@@ -274,11 +291,11 @@ export function CostGuardrailsConsole({
             <button
               className="btn primary"
               type="button"
-              disabled={!available || isPending}
+              disabled={!available || pending}
               onClick={saveRule}
             >
               <Save size={16} />
-              {isPending ? "Saving..." : "Save rule"}
+              {pending ? "Saving..." : "Save rule"}
             </button>
             <span className="pill">
               <EyeOff size={14} />
@@ -286,7 +303,9 @@ export function CostGuardrailsConsole({
             </span>
           </div>
           {notice ? (
-            <div className={`notice-strip ${notice.tone}`}>{notice.text}</div>
+            <div className={`notice-strip ${notice.tone}`} role="status">
+              {notice.text}
+            </div>
           ) : null}
         </div>
         <div className="card grid">

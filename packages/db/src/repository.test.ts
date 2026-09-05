@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { SOURCE_REGISTRY } from "@toksync/shared";
 import { FileTokSyncStore } from "./store";
 import { FileVaultArtifactStore, TokSyncRepository } from "./repository";
 import { PostgresVaultExportRepository } from "./vault-postgres";
@@ -90,12 +91,23 @@ function createRepoWithStore() {
   return { repo: new TokSyncRepository(store), store, file };
 }
 
-function authorizeDevice(repo: TokSyncRepository, username = "demo") {
+function createRepoWithTrackingStore() {
+  const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
+  const file = path.join(dir, "db.json");
+  const store = new TrackingFileStore(file);
+  return { repo: new TokSyncRepository(store), store, file };
+}
+
+function authorizeDevice(
+  repo: TokSyncRepository,
+  username = "demo",
+  deviceFingerprint = `${username}-fingerprint`,
+) {
   const started = repo.createDeviceCode({
     deviceName: "Test device",
     platform: "windows",
     agentVersion: "0.1.0",
-    deviceFingerprint: `${username}-fingerprint`,
+    deviceFingerprint,
   });
   repo.authorizeDeviceCode(started.userCode, username);
   const auth = repo.pollDeviceCode(started.deviceCode);
@@ -452,10 +464,593 @@ describe("TokSyncRepository", () => {
       showModelBreakdown: false,
     });
     expect(repo.getPublicStats("demo")?.totalTokens).toBe(157);
+    expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(
+      expect.any(String),
+    );
+    expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toEqual(
+      expect.any(String),
+    );
+    expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(expect.any(String));
 
     repo.deleteDeviceData("demo", auth.deviceId);
     expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(0);
+    expect(repo.dashboardSummary("demo")?.lastSyncAt).toBeUndefined();
+    expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toBeUndefined();
     expect(repo.getPublicStats("demo")?.totalTokens).toBe(0);
+    expect(repo.getPublicStats("demo")?.lastSyncAt).toBeUndefined();
+  });
+
+  it("falls back to remaining device sync timestamps after clearing recent device data", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T12:00:00.000Z"));
+      const repo = createRepo();
+      const first = authorizeDevice(repo);
+      ingestEvents(
+        repo,
+        first,
+        [
+          usageEvent(first.deviceId, "2026-02-03", 0.01, {
+            dedupKey: "codex:first-device-before-delete",
+            sourceMessageId: "first-device-before-delete",
+          }),
+        ],
+        "first-device-run",
+      );
+      const firstSyncAt = repo.dashboardSummary("demo")?.lastSyncAt;
+      expect(firstSyncAt).toEqual("2026-02-03T12:00:00.000Z");
+
+      vi.setSystemTime(new Date("2026-02-04T12:00:00.000Z"));
+      const second = authorizeDevice(repo, "demo", "demo-second-fingerprint");
+      ingestEvents(
+        repo,
+        second,
+        [
+          usageEvent(second.deviceId, "2026-02-04", 0.02, {
+            dedupKey: "codex:second-device-before-delete",
+            sourceMessageId: "second-device-before-delete",
+          }),
+        ],
+        "second-device-run",
+      );
+      repo.setPublicProfile("demo", {
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+      });
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(
+        "2026-02-04T12:00:00.000Z",
+      );
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(
+        "2026-02-04T12:00:00.000Z",
+      );
+
+      vi.setSystemTime(new Date("2026-02-05T12:00:00.000Z"));
+      repo.deleteDeviceData("demo", second.deviceId);
+      expect(repo.listSyncRuns("demo").map((run) => run.clientRunId)).toEqual([
+        "second-device-run",
+        "first-device-run",
+      ]);
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(firstSyncAt);
+      expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toEqual(
+        firstSyncAt,
+      );
+      expect(repo.dashboardOverview("demo")?.status.lastSyncAt).toEqual(
+        firstSyncAt,
+      );
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(firstSyncAt);
+
+      ingestEvents(
+        repo,
+        second,
+        [
+          usageEvent(second.deviceId, "2026-02-05", 0.03, {
+            dedupKey: "codex:second-device-after-delete",
+            sourceMessageId: "second-device-after-delete",
+          }),
+        ],
+        "second-device-run",
+      );
+
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(
+        "2026-02-05T12:00:00.001Z",
+      );
+      expect(
+        repo
+          .listSyncRuns("demo")
+          .find((run) => run.clientRunId === "second-device-run")?.startedAt,
+      ).toBe("2026-02-04T12:00:00.000Z");
+      expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toEqual(
+        "2026-02-05T12:00:00.001Z",
+      );
+      expect(repo.dashboardOverview("demo")?.status.lastSyncAt).toEqual(
+        "2026-02-05T12:00:00.001Z",
+      );
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(
+        "2026-02-05T12:00:00.001Z",
+      );
+
+      repo.deleteDeviceData("demo", second.deviceId);
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(firstSyncAt);
+      expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toEqual(
+        firstSyncAt,
+      );
+      expect(repo.dashboardOverview("demo")?.status.lastSyncAt).toEqual(
+        firstSyncAt,
+      );
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(firstSyncAt);
+
+      repo.deleteDeviceData("demo", first.deviceId);
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toBeUndefined();
+      expect(
+        repo.dashboardOverview("demo")?.summary.lastSyncAt,
+      ).toBeUndefined();
+      expect(repo.dashboardOverview("demo")?.status.lastSyncAt).toBeUndefined();
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restore public workspace labels after submitted data deletion", () => {
+    const repo = createRepo();
+    const auth = authorizeDevice(repo);
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          workspaceLabel: "oss-repo",
+          workspaceKeyHash: "sha256:public-label",
+        }),
+      ],
+      "workspace-public-run",
+    );
+
+    repo.setPublicProfile("demo", {
+      enabled: true,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      showWorkspaceBreakdown: true,
+    });
+    expect(repo.getPublicStats("demo")?.topWorkspaces).toEqual([
+      { key: "oss-repo", tokens: 157, costUsd: 0.01, messages: 1 },
+    ]);
+
+    repo.deleteSubmittedData("demo");
+
+    expect(repo.getUser("demo")).toMatchObject({
+      publicProfileEnabled: false,
+      showWorkspaceBreakdown: false,
+    });
+    expect(repo.getPublicStats("demo")).toBeNull();
+
+    repo.setPublicProfile("demo", {
+      enabled: true,
+      showCost: false,
+      showSourceBreakdown: false,
+      showModelBreakdown: false,
+      showWorkspaceBreakdown: false,
+    });
+
+    expect(repo.getPublicStats("demo")).toMatchObject({
+      showWorkspaceBreakdown: false,
+      topWorkspaces: [],
+    });
+    const proofPack = repo.getPublicProofPack("demo");
+    expect(proofPack?.publicFields).not.toContain("topWorkspaces");
+    expect(proofPack?.summary).toMatchObject({
+      topWorkspaces: [],
+      controls: {
+        showWorkspaceBreakdown: false,
+      },
+    });
+  });
+
+  it("extends dashboard overview with compact stored sync status counts", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const { repo, store } = createRepoWithStore();
+      const auth = authorizeDevice(repo);
+      const result = repo.ingestUsageBatch(auth.deviceToken, {
+        schemaVersion: 1,
+        runId: "partial-run",
+        device: {
+          id: auth.deviceId,
+          name: "Test device",
+          platform: "windows",
+          agentVersion: "0.1.0",
+        },
+        mode: "sync",
+        sourceVersions: { codex: null },
+        events: [
+          usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+            dedupKey: "codex:overview-status-valid",
+            sourceMessageId: "overview-status-valid",
+          }),
+          usageEvent("other-device", "2026-02-03", 0.01, {
+            dedupKey: "codex:overview-status-wrong-device",
+            sourceMessageId: "overview-status-wrong-device",
+          }),
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("ingest failed");
+
+      const user = repo.getUser("demo");
+      expect(user).toBeDefined();
+      if (!user) throw new Error("missing demo user");
+
+      const data = store.read();
+      data.mergeIssues.push({
+        id: "merge-open",
+        userId: user.id,
+        type: "workspace_label_conflict",
+        status: "open",
+        source: "codex",
+        devices: [auth.deviceId],
+        affectedEvents: 1,
+        affectedTokens: 157,
+        suggestedAction: "rename_workspace",
+        createdAt: "2026-02-03T12:00:02.000Z",
+      });
+      data.mergeIssues.push({
+        id: "merge-resolved",
+        userId: user.id,
+        type: "identity_conflict",
+        status: "resolved",
+        source: "codex",
+        devices: [auth.deviceId],
+        affectedEvents: 1,
+        affectedTokens: 157,
+        suggestedAction: "split_device_identity",
+        createdAt: "2026-02-03T12:00:01.000Z",
+        resolvedAt: "2026-02-03T12:00:03.000Z",
+      });
+      store.write(data);
+
+      const overview = repo.dashboardOverview("demo");
+
+      expect(overview?.status?.state).toBe("needs_attention");
+      expect(overview?.status?.lastSyncAt).toEqual(expect.any(String));
+      expect(overview?.status?.latestRun).toMatchObject({
+        clientRunId: "partial-run",
+        status: "partial",
+        insertedCount: 1,
+        skippedCount: 0,
+        errorCount: 1,
+      });
+      expect(overview?.status?.counts.latestRunErrors).toBe(1);
+      expect(overview?.status?.counts.mergeIssues).toBe(1);
+      expect(overview?.status?.counts.sourceHealthIssues).toBe(0);
+      expect(overview?.status?.totalIssues).toBe(
+        (overview?.status?.counts.latestRunErrors ?? 0) +
+          (overview?.status?.counts.mergeIssues ?? 0) +
+          (overview?.status?.counts.sourceHealthIssues ?? 0),
+      );
+      const sourceHealth = repo.sourceHealth("demo");
+      expect(sourceHealth).toHaveLength(SOURCE_REGISTRY.length);
+      expect(sourceHealth).toContainEqual(
+        expect.objectContaining({
+          source: "codex",
+        }),
+      );
+      expect(sourceHealth.filter((row) => row.recommendedAction)).toHaveLength(
+        overview?.status?.counts.sourceHealthIssues ?? 0,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not report unused source health rows as actionable dashboard issues", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const repo = createRepo();
+      authorizeDevice(repo);
+
+      expect(repo.dashboardOverview("demo")?.status).toMatchObject({
+        state: "waiting_for_sync",
+        counts: {
+          latestRunErrors: 0,
+          mergeIssues: 0,
+          sourceHealthIssues: 0,
+        },
+        totalIssues: 0,
+      });
+
+      const auth = authorizeDevice(repo, "demo-codex-only");
+      ingestEvents(
+        repo,
+        auth,
+        [
+          usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+            dedupKey: "codex:only-configured-source",
+            sourceMessageId: "only-configured-source",
+          }),
+        ],
+        "only-codex-run",
+      );
+
+      const overview = repo.dashboardOverview("demo-codex-only");
+      const sourceHealth = repo.sourceHealth("demo-codex-only");
+
+      expect(overview?.status?.state).toBe("healthy");
+      expect(overview?.status?.counts.sourceHealthIssues).toBe(0);
+      expect(sourceHealth).toHaveLength(SOURCE_REGISTRY.length);
+      expect(sourceHealth).toContainEqual(
+        expect.objectContaining({
+          source: "codex",
+          status: "ok",
+        }),
+      );
+      expect(
+        sourceHealth.filter(
+          (row) => row.source !== "codex" && row.status !== "ok",
+        ),
+      ).not.toHaveLength(0);
+      expect(sourceHealth.filter((row) => row.recommendedAction)).toHaveLength(
+        0,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps dashboard overview and source health reads from mutating stored snapshots", () => {
+    const { repo, store } = createRepoWithTrackingStore();
+    const auth = authorizeDevice(repo);
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          dedupKey: "codex:read-only-health",
+          sourceMessageId: "read-only-health",
+        }),
+      ],
+      "read-only-health-run",
+    );
+    const before = {
+      transactions: store.transactions,
+      writes: store.writes,
+      sourceHealthSnapshots: store.read().sourceHealthSnapshots,
+    };
+
+    repo.dashboardOverview("demo");
+    repo.sourceHealth("demo");
+
+    expect(store.transactions).toBe(before.transactions);
+    expect(store.writes).toBe(before.writes);
+    expect(store.read().sourceHealthSnapshots).toEqual(
+      before.sourceHealthSnapshots,
+    );
+  });
+
+  it("refreshes source health to stale on read-only time advancement", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const repo = createRepo();
+      const auth = authorizeDevice(repo);
+      ingestEvents(
+        repo,
+        auth,
+        SOURCE_REGISTRY.map((source, index) =>
+          usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+            source: source.id,
+            sourceSessionId: `stale-${source.id}-session`,
+            sourceMessageId: `stale-${source.id}-message`,
+            dedupKey: `${source.id}:stale-${index}`,
+          }),
+        ),
+        "fresh-source-health-run",
+      );
+
+      const initial = repo.sourceHealth("demo");
+      expect(initial).toHaveLength(SOURCE_REGISTRY.length);
+      expect(initial.every((row) => row.status === "ok")).toBe(true);
+
+      vi.setSystemTime(new Date("2026-02-11T13:00:00.000Z"));
+
+      const stale = repo.sourceHealth("demo");
+      expect(stale).toHaveLength(SOURCE_REGISTRY.length);
+      expect(stale.every((row) => row.status === "stale")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes cleared-device duplicate issues from merge issue derivation", () => {
+    const repo = createRepo();
+    const auth = authorizeDevice(repo);
+    const duplicateEvent = usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+      dedupKey: "codex:cleared-device-duplicate",
+      sourceMessageId: "cleared-device-duplicate",
+    });
+
+    ingestEvents(repo, auth, [duplicateEvent], "cleared-device-base-run");
+    ingestEvents(repo, auth, [duplicateEvent], "cleared-device-duplicate-run");
+
+    expect(repo.mergeIssues("demo")).toEqual([
+      expect.objectContaining({
+        type: "duplicate_history",
+        status: "open",
+        devices: [auth.deviceId],
+        affectedEvents: 1,
+      }),
+    ]);
+
+    repo.deleteDeviceData("demo", auth.deviceId);
+
+    expect(
+      repo
+        .mergeIssues("demo")
+        .filter((issue) => issue.type === "duplicate_history"),
+    ).toEqual([]);
+  });
+
+  it("ignores cleared-device sync runs when deriving source health", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+      const repo = createRepo();
+      const auth = authorizeDevice(repo);
+      ingestEvents(
+        repo,
+        auth,
+        [
+          usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+            dedupKey: "codex:cleared-source-health",
+            sourceMessageId: "cleared-source-health",
+          }),
+        ],
+        "cleared-source-health-run",
+      );
+
+      repo.deleteDeviceData("demo", auth.deviceId);
+
+      expect(repo.listSyncRuns("demo")).toHaveLength(1);
+      const sourceHealth = repo.sourceHealth("demo");
+      expect(sourceHealth).toContainEqual(
+        expect.objectContaining({
+          source: "codex",
+          status: "missing",
+          lastSuccessfulSyncAt: undefined,
+          lastEventAt: undefined,
+          recommendedAction: undefined,
+        }),
+      );
+      expect(sourceHealth.filter((row) => row.recommendedAction)).toHaveLength(
+        0,
+      );
+      const status = repo.dashboardOverview("demo")?.status;
+      expect(status).toMatchObject({
+        state: "waiting_for_sync",
+        latestRun: null,
+        counts: {
+          sourceHealthIssues: 0,
+        },
+        totalIssues: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps resolved duplicate issues resolved until skipped evidence increases", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "toksync-db-"));
+    const file = path.join(dir, "db.json");
+    const store = new TrackingFileStore(file);
+    const repo = new TokSyncRepository(store);
+    const auth = authorizeDevice(repo);
+    const duplicateEvent = usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+      dedupKey: "codex:resolved-duplicate",
+      sourceMessageId: "resolved-duplicate",
+    });
+
+    ingestEvents(repo, auth, [duplicateEvent], "resolved-duplicate-base-run");
+    ingestEvents(repo, auth, [duplicateEvent], "resolved-duplicate-run");
+
+    const openIssue = repo
+      .mergeIssues("demo")
+      .find(
+        (issue) =>
+          issue.type === "duplicate_history" && issue.status === "open",
+      );
+    expect(openIssue).toBeDefined();
+    if (!openIssue) throw new Error("missing duplicate issue");
+
+    repo.resolveMergeIssue("demo", openIssue.id, "confirm_duplicate");
+    const transactionsBeforeRead = store.transactions;
+
+    expect(
+      repo
+        .mergeIssues("demo")
+        .filter((issue) => issue.type === "duplicate_history"),
+    ).toEqual([
+      expect.objectContaining({
+        id: openIssue.id,
+        status: "resolved",
+        source: "codex",
+        affectedEvents: 1,
+      }),
+    ]);
+    expect(store.transactions).toBe(transactionsBeforeRead + 1);
+
+    ingestEvents(repo, auth, [duplicateEvent], "resolved-duplicate-run-2");
+
+    expect(
+      repo
+        .mergeIssues("demo")
+        .filter((issue) => issue.type === "duplicate_history"),
+    ).toEqual([
+      expect.objectContaining({
+        status: "open",
+        source: "codex",
+        affectedEvents: 2,
+      }),
+      expect.objectContaining({
+        id: openIssue.id,
+        status: "resolved",
+        source: "codex",
+        affectedEvents: 1,
+      }),
+    ]);
+  });
+
+  it("keeps compact latest run ordering aligned with listSyncRuns", () => {
+    const { repo, store } = createRepoWithStore();
+    const auth = authorizeDevice(repo);
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-03", 0.01, {
+          dedupKey: "codex:ordering-first",
+          sourceMessageId: "ordering-first",
+        }),
+      ],
+      "ordering-first-run",
+    );
+    ingestEvents(
+      repo,
+      auth,
+      [
+        usageEvent(auth.deviceId, "2026-02-04", 0.01, {
+          dedupKey: "codex:ordering-second",
+          sourceMessageId: "ordering-second",
+        }),
+      ],
+      "ordering-second-run",
+    );
+
+    const data = store.read();
+    const firstRun = data.syncRuns.find(
+      (run) => run.clientRunId === "ordering-first-run",
+    );
+    const secondRun = data.syncRuns.find(
+      (run) => run.clientRunId === "ordering-second-run",
+    );
+    expect(firstRun).toBeDefined();
+    expect(secondRun).toBeDefined();
+    if (!firstRun || !secondRun) throw new Error("missing sync runs");
+
+    firstRun.startedAt = "2026-02-03T10:00:00.000Z";
+    firstRun.finishedAt = "2026-02-03T12:00:00.000Z";
+    secondRun.startedAt = "2026-02-03T11:00:00.000Z";
+    secondRun.finishedAt = "2026-02-03T11:05:00.000Z";
+    store.write(data);
+
+    const runs = repo.listSyncRuns("demo");
+    const overview = repo.dashboardOverview("demo");
+
+    expect(runs[0]?.clientRunId).toBe("ordering-second-run");
+    expect(overview?.status?.latestRun?.clientRunId).toBe(runs[0]?.clientRunId);
   });
 
   it("updates events when parser fixes change generated dedup keys", () => {

@@ -6,6 +6,7 @@ interface SortableTableHeaderProps<T extends string> {
   activeField: T;
   direction: SortDirection;
   children: string;
+  baseParams?: Record<string, string>;
 }
 
 export function SortableTableHeader<T extends string>({
@@ -13,6 +14,7 @@ export function SortableTableHeader<T extends string>({
   activeField,
   direction,
   children,
+  baseParams,
 }: SortableTableHeaderProps<T>) {
   const active = field === activeField;
   const nextDirection: SortDirection =
@@ -22,7 +24,9 @@ export function SortableTableHeader<T extends string>({
       ? ArrowUp
       : ArrowDown
     : ArrowUpDown;
-  const params = new URLSearchParams({ sort: field, dir: nextDirection });
+  const params = new URLSearchParams(baseParams);
+  params.set("sort", field);
+  params.set("dir", nextDirection);
 
   return (
     <th aria-sort={active ? ariaSortValue(direction) : undefined}>

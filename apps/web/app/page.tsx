@@ -10,30 +10,27 @@ export default async function HomePage() {
         <p className="page-kicker">private usage console</p>
         <h1>TokSync</h1>
         <p className="lede">
-          Tokscale-style AI coding usage visibility, rebuilt around private
-          multi-device sync. v0.5 keeps metrics-only payloads, adds encrypted
-          vault recovery, and publishes README SVGs, Proof Packs, and Wrapped
-          cards only after opt-in.
+          Private AI coding usage visibility for people who want one dashboard
+          across Codex, Claude Code, and OpenCode without uploading prompts,
+          replies, tool output, or raw project paths.
         </p>
         <div className="hero-terminal" aria-label="TokSync quick start">
           <div className="terminal-line">
-            <span>$</span> pnpm agent login --auto-authorize demo
+            <span>1</span> Sign in with GitHub in the web console
           </div>
           <div className="terminal-line">
-            <span>$</span> pnpm agent sync --dry-run --fixture
-            ./packages/test-fixtures/codex/basic
+            <span>2</span> Run pnpm agent login on each coding machine
           </div>
           <div className="terminal-line">
-            <span>$</span> pnpm agent sync --fixture
-            ./packages/test-fixtures/codex/basic
+            <span>3</span> Preview, then sync metrics-only usage
           </div>
         </div>
         <div className="toolbar" style={{ marginTop: 18 }}>
-          <a className="btn primary" href="/app">
-            Open console
+          <a className="btn primary" href="/login">
+            Sign in
           </a>
-          <a className="btn" href="/app/proof-pack">
-            Proof Pack
+          <a className="btn" href="/app">
+            Open console
           </a>
           <a className="btn" href="/docs/getting-started">
             Quick start
@@ -76,10 +73,8 @@ export default async function HomePage() {
         <div className="proof-list">
           <div className="proof-row">
             <div>
-              <strong>Dry-run first</strong>
-              <span>
-                Preview source, date range, tokens, cost, and warnings.
-              </span>
+              <strong>Browser session for devices</strong>
+              <span>Device codes attach to the signed-in web account.</span>
             </div>
             <span className="pill good">ready</span>
           </div>
@@ -92,8 +87,8 @@ export default async function HomePage() {
           </div>
           <div className="proof-row">
             <div>
-              <strong>Public Proof Pack</strong>
-              <span>Receipt digests and public aggregates stay shareable.</span>
+              <strong>Public sharing stays separate</strong>
+              <span>README badges and Proof Packs use opt-in aggregates.</span>
             </div>
             <span className="pill good">v0.5</span>
           </div>

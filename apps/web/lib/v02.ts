@@ -31,13 +31,6 @@ export interface UsageDailyDay {
   >;
 }
 
-export interface PublicProfileStateLike {
-  enabled?: boolean;
-  showCost?: boolean;
-  showSourceBreakdown?: boolean;
-  showModelBreakdown?: boolean;
-}
-
 export interface PublicProfileStatsLike {
   totalTokens?: number;
   totalCostUsd?: number;
@@ -61,13 +54,6 @@ export interface SourceHealthRow {
   syncLabel: string;
   retentionNote: string;
   publicNote: string;
-}
-
-export interface MergeCopilotItem {
-  title: string;
-  detail: string;
-  badge: string;
-  tone: "good" | "warn" | "stop";
 }
 
 export interface ReceiptPreview {
@@ -316,61 +302,6 @@ export function buildSourceParityRows({
               .map((row) => `${row.key}:${row.tokens}`)
               .join(" | ")}`
           : "No source usage has been synced into the current dashboard yet.",
-    },
-  ];
-}
-
-export function buildMergeCopilot({
-  summary,
-  publicProfile,
-  latestRun,
-}: {
-  summary?: DashboardSummary | null;
-  publicProfile?: PublicProfileStateLike | null | undefined;
-  latestRun?: SyncRun | null | undefined;
-}): MergeCopilotItem[] {
-  const inserted = latestRun?.insertedCount ?? 0;
-  const skipped = latestRun?.skippedCount ?? 0;
-  const updated = latestRun?.updatedCount ?? 0;
-  const errors = latestRun?.errorCount ?? 0;
-  const runStatus = latestRun?.status ?? "idle";
-  const mergedEvents = inserted + skipped + updated;
-
-  return [
-    {
-      title: "Dedup stability",
-      detail: latestRun
-        ? errors > 0
-          ? `${errors} per-event errors need review before trusting totals.`
-          : skipped >= inserted
-            ? `${skipped} replayed events were absorbed without inflating totals.`
-            : `${inserted} fresh events landed; skip pressure is still low.`
-        : "No sync run yet. Merge Copilot will classify replay vs fresh intake once data lands.",
-      badge: latestRun ? `${mergedEvents} events` : "idle",
-      tone: errors > 0 ? "stop" : skipped >= inserted ? "good" : "warn",
-    },
-    {
-      title: "Public cache impact",
-      detail: publicProfile?.enabled
-        ? latestRun?.status === "completed"
-          ? "Public aggregates can refresh only after a completed private rollup."
-          : "Public profile is enabled, but this run has not produced a clean cache refresh yet."
-        : "Public profile is private, so merge actions only touch private totals for now.",
-      badge: publicProfile?.enabled ? "opt-in" : "private",
-      tone:
-        publicProfile?.enabled && latestRun?.status !== "completed"
-          ? "warn"
-          : "good",
-    },
-    {
-      title: "Manual confirmation lane",
-      detail: latestRun
-        ? runStatus === "partial" || errors > 0
-          ? "Keep the run open for human follow-up on wrong-device or malformed payload errors."
-          : "Current backend returns replay-safe outcomes; no raw message merge UI is required."
-        : "No outstanding merge queue. TokSync still keeps raw content out of scope.",
-      badge: runStatus,
-      tone: runStatus === "partial" || runStatus === "failed" ? "warn" : "good",
     },
   ];
 }

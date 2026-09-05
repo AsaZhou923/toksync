@@ -6,25 +6,33 @@ export default function GettingStartedPage() {
           <p className="page-kicker">local metrics loop</p>
           <h1>Getting started</h1>
           <p className="lede">
-            Use the demo user and synthetic fixtures to verify login, dry-run,
-            sync, idempotency, and dashboard rollups without uploading private
-            conversation content.
+            Connect the web console first, then authorize each local agent from
+            the same browser session. TokSync syncs usage metrics only, so
+            prompts, replies, tool payloads, and raw project paths stay out of
+            uploaded data.
           </p>
         </div>
       </header>
       <section className="grid grid-2">
         <div className="card">
-          <h2 className="section-title">Start services</h2>
+          <h2 className="section-title">User path</h2>
+          <div className="console-stack">
+            <div className="console-line">
+              <span>web</span>
+              <strong>Sign in with GitHub</strong>
+            </div>
+            <div className="command">pnpm agent login</div>
+            <div className="command">pnpm agent sync --dry-run</div>
+            <div className="command">pnpm agent sync</div>
+          </div>
+        </div>
+        <div className="card">
+          <h2 className="section-title">Contributor smoke test</h2>
           <div className="console-stack">
             <div className="command">pnpm install</div>
             <div className="command">cp .env.example .env</div>
             <div className="command">pnpm db:reset && pnpm db:seed</div>
             <div className="command">pnpm dev</div>
-          </div>
-        </div>
-        <div className="card">
-          <h2 className="section-title">Sync fixture usage</h2>
-          <div className="console-stack">
             <div className="command">
               pnpm agent login --auto-authorize demo
             </div>
@@ -34,6 +42,7 @@ export default function GettingStartedPage() {
             </div>
             <div className="command">
               pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+              --yes
             </div>
           </div>
         </div>
@@ -42,20 +51,20 @@ export default function GettingStartedPage() {
         <h2 className="section-title">Expected result</h2>
         <div className="console-stack">
           <div className="console-line">
-            <span>first sync</span>
-            <strong>inserts metrics</strong>
+            <span>authorize</span>
+            <strong>CLI connects to your signed-in account</strong>
           </div>
           <div className="console-line">
-            <span>repeat sync</span>
-            <strong>skips duplicate events</strong>
+            <span>dry-run</span>
+            <strong>shows counts, costs, and warnings before upload</strong>
           </div>
           <div className="console-line">
-            <span>dashboard</span>
-            <strong>private aggregate rollups</strong>
+            <span>sync</span>
+            <strong>updates private aggregate rollups</strong>
           </div>
           <div className="console-line">
             <span>public output</span>
-            <strong>opt-in SVG aggregates only</strong>
+            <strong>stays off until explicitly enabled</strong>
           </div>
         </div>
       </section>

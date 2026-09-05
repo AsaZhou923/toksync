@@ -134,11 +134,21 @@ function resolveGitHubOAuth(
     clientSecret,
     redirectUri,
     authorizeUrl:
-      overrides?.authorizeUrl ?? "https://github.com/login/oauth/authorize",
+      overrides?.authorizeUrl ??
+      process.env.GITHUB_AUTHORIZE_URL ??
+      "https://github.com/login/oauth/authorize",
     tokenUrl:
-      overrides?.tokenUrl ?? "https://github.com/login/oauth/access_token",
-    userUrl: overrides?.userUrl ?? "https://api.github.com/user",
-    emailsUrl: overrides?.emailsUrl ?? "https://api.github.com/user/emails",
+      overrides?.tokenUrl ??
+      process.env.GITHUB_TOKEN_URL ??
+      "https://github.com/login/oauth/access_token",
+    userUrl:
+      overrides?.userUrl ??
+      process.env.GITHUB_USER_URL ??
+      "https://api.github.com/user",
+    emailsUrl:
+      overrides?.emailsUrl ??
+      process.env.GITHUB_EMAILS_URL ??
+      "https://api.github.com/user/emails",
     fetch: overrides?.fetch ?? fetch,
   };
 }

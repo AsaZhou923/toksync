@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { KeyRound, RefreshCw, ShieldAlert } from "lucide-react";
+import { clientApiFetch } from "../lib/client-api";
 
 export function ApiTokenCard({ username }: { username: string }) {
   const [tokens, setTokens] = useState<ApiTokenMetadata[]>([]);
@@ -20,10 +19,11 @@ export function ApiTokenCard({ username }: { username: string }) {
     setStatus("checking");
     if (options.clearCopyOnce ?? true) setNewToken(null);
     try {
-      const response = await fetch(`${API_URL}/v1/settings/tokens`, {
-        cache: "no-store",
-        headers: { "X-TokSync-User": username },
-      });
+      const response = await clientApiFetch(
+        "/v1/settings/tokens",
+        { cache: "no-store" },
+        username,
+      );
 
       if (response.ok) {
         const payload = (await response.json()) as {
@@ -43,7 +43,7 @@ export function ApiTokenCard({ username }: { username: string }) {
       if (response.status === 404 || response.status === 501) {
         setStatus("unavailable");
         setMessage(
-          "Current backend snapshot does not expose /v1/user-api-token yet. The UI stays in fallback mode.",
+          "Current backend snapshot does not expose /v1/settings/tokens yet. The UI stays in fallback mode.",
         );
         return;
       }
@@ -61,14 +61,17 @@ export function ApiTokenCard({ username }: { username: string }) {
   async function createToken() {
     setStatus("checking");
     try {
-      const response = await fetch(`${API_URL}/v1/settings/tokens`, {
-        method: "POST",
-        body: JSON.stringify({ name: "Web-created sync token" }),
-        headers: {
-          "Content-Type": "application/json",
-          "X-TokSync-User": username,
+      const response = await clientApiFetch(
+        "/v1/settings/tokens",
+        {
+          method: "POST",
+          body: JSON.stringify({ name: "Web-created sync token" }),
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      });
+        username,
+      );
       if (!response.ok) throw new Error(String(response.status));
       const payload = (await response.json()) as {
         token?: string;
@@ -86,33 +89,20 @@ export function ApiTokenCard({ username }: { username: string }) {
     }
   }
 
-  async function deleteSubmittedData() {
-    setStatus("checking");
-    setNewToken(null);
-    try {
-      const response = await fetch(`${API_URL}/v1/settings/submitted-data`, {
-        method: "DELETE",
-        headers: { "X-TokSync-User": username },
-      });
-      if (!response.ok) throw new Error(String(response.status));
-      setStatus("available");
-      setMessage(
-        "Public submitted data cache cleared; private metrics remain.",
-      );
-    } catch {
-      setStatus("error");
-      setMessage("Submitted-data deletion failed.");
-    }
-  }
-
   async function revokeToken(tokenId: string) {
+    const confirmed = window.confirm(
+      "Revoke this user API token? Future syncs using it will fail; existing private metrics stay unchanged.",
+    );
+    if (!confirmed) return;
+
     setStatus("checking");
     setNewToken(null);
     try {
-      const response = await fetch(`${API_URL}/v1/settings/tokens/${tokenId}`, {
-        method: "DELETE",
-        headers: { "X-TokSync-User": username },
-      });
+      const response = await clientApiFetch(
+        `/v1/settings/tokens/${tokenId}`,
+        { method: "DELETE" },
+        username,
+      );
       if (!response.ok) throw new Error(String(response.status));
       setStatus("available");
       setMessage("Token revoked. Existing private metrics are unchanged.");
@@ -198,16 +188,7 @@ export function ApiTokenCard({ username }: { username: string }) {
           <RefreshCw size={16} />
           Refresh
         </button>
-        <button className="btn" type="button" onClick={deleteSubmittedData}>
-          <Trash2 size={16} />
-          Clear public submitted data
-        </button>
       </div>
-      <p className="muted">
-        Clearing public submitted data disables public profile and leaderboard
-        cache only. It does not delete private raw metrics, device data, or
-        vault exports.
-      </p>
     </div>
   );
 }

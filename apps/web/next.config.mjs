@@ -6,6 +6,10 @@ const standaloneOutput =
 const devScriptPolicy =
   process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'";
 const apiOrigin = apiOriginFromEnv();
+const playwrightDistDir =
+  process.env.TOKSYNC_PLAYWRIGHT_NEXT_DIST_DIR?.trim() || undefined;
+const playwrightTsconfigPath =
+  process.env.TOKSYNC_PLAYWRIGHT_TSCONFIG_PATH?.trim() || undefined;
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -15,6 +19,10 @@ const contentSecurityPolicy = [
   `img-src 'self' data: https: ${apiOrigin} http://localhost:4000 http://127.0.0.1:4000`,
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
+  // Next's static pages emit inline hydration scripts. Removing unsafe-inline
+  // requires nonce propagation plus dynamic rendering, or a verified hash policy.
+  // Keep this compatibility constraint explicit; SVG responses use script-src 'none'.
+  // https://nextjs.org/docs/app/guides/content-security-policy#without-nonces
   `script-src 'self' 'unsafe-inline'${devScriptPolicy}`,
   `connect-src 'self' ${apiOrigin} http://localhost:4000 http://127.0.0.1:4000`,
 ].join("; ");
@@ -24,7 +32,11 @@ const nextConfig = {
   transpilePackages: ["@toksync/shared"],
   typedRoutes: true,
   poweredByHeader: false,
+  distDir: playwrightDistDir,
   output: standaloneOutput ? "standalone" : undefined,
+  typescript: playwrightTsconfigPath
+    ? { tsconfigPath: playwrightTsconfigPath }
+    : undefined,
   async headers() {
     return [
       {

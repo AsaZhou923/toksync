@@ -619,7 +619,10 @@ export class TokSyncRepository {
         };
       }
       const { user, device } = usageAuth;
-      const now = new Date().toISOString();
+      let now = new Date().toISOString();
+      if (device.dataClearedAt && now <= device.dataClearedAt) {
+        now = new Date(Date.parse(device.dataClearedAt) + 1).toISOString();
+      }
       let syncRun = data.syncRuns.find(
         (run) =>
           run.userId === user.id &&
@@ -767,7 +770,7 @@ export class TokSyncRepository {
     const events = this.filterEvents(data, user.id, filters);
     return dashboardSummaryFromEvents(
       events,
-      data.syncRuns.filter((run) => run.userId === user.id),
+      currentSyncRunsForUser(data, user.id),
     );
   }
 
@@ -784,10 +787,21 @@ export class TokSyncRepository {
     const user = this.userByName(data, username);
     if (!user) return null;
     const events = this.filterEvents(data, user.id, filters);
-    const syncRuns = data.syncRuns.filter((run) => run.userId === user.id);
+    const currentSyncRuns = currentSyncRunsForUser(data, user.id);
+    const sourceHealthSnapshots = deriveSourceHealthSnapshots(
+      data,
+      user.id,
+      new Date().toISOString(),
+    );
     return {
-      summary: dashboardSummaryFromEvents(events, syncRuns),
+      summary: dashboardSummaryFromEvents(events, currentSyncRuns),
       daily: usageDailyFromEvents(events),
+      status: dashboardStatusFromData(
+        data,
+        user.id,
+        currentSyncRuns,
+        sourceHealthSnapshots,
+      ),
     };
   }
 
@@ -812,7 +826,7 @@ export class TokSyncRepository {
     return this.store
       .read()
       .syncRuns.filter((run) => run.userId === user.id)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .sort(compareSyncRunsByStartedAtDesc)
       .map(syncRunView);
   }
 
@@ -838,18 +852,12 @@ export class TokSyncRepository {
   }
 
   sourceHealth(username = "demo") {
-    return this.store.transaction((data) => {
-      const user = this.userByName(data, username);
-      if (!user) return { commit: false, result: [] };
-      this.refreshSourceHealthInData(data, user.id, new Date().toISOString());
-      return {
-        commit: true,
-        result: data.sourceHealthSnapshots
-          .filter((snapshot) => snapshot.userId === user.id)
-          .sort((a, b) => a.source.localeCompare(b.source))
-          .map(sourceHealthView),
-      };
-    });
+    const data = this.store.read();
+    const user = this.userByName(data, username);
+    if (!user) return [];
+    return deriveSourceHealthSnapshots(data, user.id, new Date().toISOString())
+      .sort((a, b) => a.source.localeCompare(b.source))
+      .map(sourceHealthView);
   }
 
   listCostGuardrails(username = "demo") {
@@ -1380,6 +1388,7 @@ export class TokSyncRepository {
       user.showCost = false;
       user.showSourceBreakdown = false;
       user.showModelBreakdown = false;
+      user.showWorkspaceBreakdown = false;
       user.updatedAt = new Date().toISOString();
       data.publicProfileStats = data.publicProfileStats.filter(
         (stats) => stats.userId !== user.id,
@@ -1483,8 +1492,17 @@ export class TokSyncRepository {
       data.usageEvents = data.usageEvents.filter(
         (event) => event.deviceId !== device.id,
       );
-      device.dataClearedAt = new Date().toISOString();
+      const requestedClearAt = new Date().toISOString();
+      const now =
+        latest([
+          requestedClearAt,
+          latestDeviceSyncRunAt(data, user.id, device.id),
+          device.dataClearedAt,
+        ]) ?? requestedClearAt;
+      device.dataClearedAt = now;
       this.recomputeUserInData(data, user.id);
+      this.refreshSourceHealthInData(data, user.id, now);
+      this.refreshMergeIssuesInData(data, user.id, now);
       return {
         commit: true,
         result: { status: "completed", jobId: randomUUID() },
@@ -1790,7 +1808,11 @@ export class TokSyncRepository {
       data.usageDaily.push(row);
     }
 
-    const profile = buildProfileStats(userId, userEvents, data.syncRuns);
+    const profile = buildProfileStats(
+      userId,
+      userEvents,
+      currentSyncRunsForUser(data, userId),
+    );
     data.profileStats = data.profileStats.filter(
       (row) => row.userId !== userId,
     );
@@ -1804,6 +1826,9 @@ export class TokSyncRepository {
       const publicStats: PublicProfileStatsRecord = {
         ...profile,
         usernameLower: user.usernameLower,
+        topSources: user.showSourceBreakdown ? profile.topSources : [],
+        topModels: user.showModelBreakdown ? profile.topModels : [],
+        topWorkspaces: user.showWorkspaceBreakdown ? profile.topWorkspaces : [],
         showCost: user.showCost,
         showSourceBreakdown: user.showSourceBreakdown,
         showModelBreakdown: user.showModelBreakdown,
@@ -1953,53 +1978,9 @@ export class TokSyncRepository {
     data.sourceHealthSnapshots = data.sourceHealthSnapshots.filter(
       (snapshot) => snapshot.userId !== userId,
     );
-    const userRuns = data.syncRuns.filter((run) => run.userId === userId);
-    const userEvents = data.usageEvents.filter(
-      (event) => event.userId === userId,
+    data.sourceHealthSnapshots.push(
+      ...deriveSourceHealthSnapshots(data, userId, now),
     );
-    for (const source of SOURCE_REGISTRY) {
-      const sourceEvents = userEvents.filter(
-        (event) => event.source === source.id,
-      );
-      const sourceRuns = userRuns.filter((run) => run.sourceSummary[source.id]);
-      const lastRun = latest(
-        sourceRuns.map((run) => run.finishedAt || run.startedAt),
-      );
-      const lastEventMs = Math.max(
-        0,
-        ...sourceEvents.map((event) => event.timestampMs),
-      );
-      const stale =
-        lastRun && Date.now() - Date.parse(lastRun) > 7 * 24 * 60 * 60 * 1000;
-      const retentionRisk =
-        lastEventMs > 0 && Date.now() - lastEventMs > 21 * 24 * 60 * 60 * 1000;
-      const status: SourceHealthSnapshotRecord["status"] =
-        sourceEvents.length === 0
-          ? "missing"
-          : retentionRisk
-            ? "retention_risk"
-            : stale
-              ? "stale"
-              : "ok";
-      const snapshot: SourceHealthSnapshotRecord = {
-        id: randomUUID(),
-        userId,
-        source: source.id,
-        status,
-        details: {
-          displayName: source.displayName,
-          eventCount: sourceEvents.length,
-          retentionDays: null,
-        },
-        createdAt: now,
-      };
-      if (lastRun) snapshot.lastSuccessfulSyncAt = lastRun;
-      if (lastEventMs)
-        snapshot.lastEventAt = new Date(lastEventMs).toISOString();
-      const recommendedAction = sourceHealthAction(status, source.id);
-      if (recommendedAction) snapshot.recommendedAction = recommendedAction;
-      data.sourceHealthSnapshots.push(snapshot);
-    }
   }
 
   private refreshCostAnomaliesInData(
@@ -2119,9 +2100,48 @@ export class TokSyncRepository {
     userId: string,
     now: string,
   ) {
+    const duplicateIssues = data.mergeIssues.filter(
+      (issue) => issue.userId === userId && issue.type === "duplicate_history",
+    );
+    const previousOpenDuplicateIssues = new Map(
+      duplicateIssues
+        .filter((issue) => issue.status === "open")
+        .map((issue) => [issue.source ?? "unknown", issue] as const),
+    );
+    const historicalClosedEvidenceBySource = new Map<string, number>();
+    for (const issue of duplicateIssues) {
+      if (issue.status === "open") continue;
+      const source = issue.source ?? "unknown";
+      historicalClosedEvidenceBySource.set(
+        source,
+        Math.max(
+          historicalClosedEvidenceBySource.get(source) ?? 0,
+          issue.affectedEvents,
+        ),
+      );
+    }
+    const preservedIssues = data.mergeIssues.filter(
+      (issue) =>
+        !(
+          issue.userId === userId &&
+          issue.type === "duplicate_history" &&
+          issue.status === "open"
+        ),
+    );
+    const devicesById = new Map(
+      data.devices
+        .filter((device) => device.userId === userId)
+        .map((device) => [device.id, device] as const),
+    );
+    const duplicateRuns = data.syncRuns.filter((run) => {
+      if (run.userId !== userId || run.skippedCount <= 0) return false;
+      const device = devicesById.get(run.deviceId);
+      return (
+        !device?.dataClearedAt || syncRunActivityAt(run) > device.dataClearedAt
+      );
+    });
     const skippedBySource = new Map<string, number>();
-    for (const run of data.syncRuns.filter((item) => item.userId === userId)) {
-      if (run.skippedCount <= 0) continue;
+    for (const run of duplicateRuns) {
       const sources = Object.keys(run.sourceSummary);
       for (const source of sources.length ? sources : ["unknown"]) {
         skippedBySource.set(
@@ -2130,33 +2150,24 @@ export class TokSyncRepository {
         );
       }
     }
+    const refreshedIssues = [...preservedIssues];
     for (const [source, skipped] of skippedBySource) {
-      const existing = data.mergeIssues.find(
-        (issue) =>
-          issue.userId === userId &&
-          issue.source === source &&
-          issue.type === "duplicate_history" &&
-          issue.status === "open",
-      );
+      const existing = previousOpenDuplicateIssues.get(source);
+      if (
+        !existing &&
+        skipped <= (historicalClosedEvidenceBySource.get(source) ?? 0)
+      ) {
+        continue;
+      }
       const devices = [
         ...new Set(
-          data.syncRuns
-            .filter(
-              (run) =>
-                run.userId === userId &&
-                run.skippedCount > 0 &&
-                (run.sourceSummary[source] || source === "unknown"),
-            )
+          duplicateRuns
+            .filter((run) => run.sourceSummary[source] || source === "unknown")
             .map((run) => run.deviceId),
         ),
       ];
-      if (existing) {
-        existing.affectedEvents = skipped;
-        existing.devices = devices;
-        continue;
-      }
-      data.mergeIssues.push({
-        id: randomUUID(),
+      refreshedIssues.push({
+        id: existing?.id ?? randomUUID(),
         userId,
         type: "duplicate_history",
         status: "open",
@@ -2165,9 +2176,10 @@ export class TokSyncRepository {
         affectedEvents: skipped,
         affectedTokens: 0,
         suggestedAction: "confirm_duplicate",
-        createdAt: now,
+        createdAt: existing?.createdAt ?? now,
       });
     }
+    data.mergeIssues = refreshedIssues;
   }
 
   private hashToken(rawToken: string) {
@@ -2707,6 +2719,101 @@ function sourceHealthAction(
   return undefined;
 }
 
+function deriveSourceHealthSnapshots(
+  data: TokSyncData,
+  userId: string,
+  now: string,
+) {
+  const nowMs = Date.parse(now);
+  const userRuns = currentSyncRunsForUser(data, userId);
+  const userEvents = data.usageEvents.filter(
+    (event) => event.userId === userId,
+  );
+  const previousBySource = new Map(
+    data.sourceHealthSnapshots
+      .filter((snapshot) => snapshot.userId === userId)
+      .map((snapshot) => [snapshot.source, snapshot]),
+  );
+
+  return SOURCE_REGISTRY.map((source) => {
+    const sourceEvents = userEvents.filter(
+      (event) => event.source === source.id,
+    );
+    const sourceRuns = userRuns.filter((run) => run.sourceSummary[source.id]);
+    const lastRun = latest(
+      sourceRuns.map((run) => run.finishedAt || run.startedAt),
+    );
+    const lastEventMs = Math.max(
+      0,
+      ...sourceEvents.map((event) => event.timestampMs),
+    );
+    const stale =
+      lastRun && nowMs - Date.parse(lastRun) > 7 * 24 * 60 * 60 * 1000;
+    const retentionRisk =
+      lastEventMs > 0 && nowMs - lastEventMs > 21 * 24 * 60 * 60 * 1000;
+    const status: SourceHealthSnapshotRecord["status"] =
+      sourceEvents.length === 0
+        ? "missing"
+        : retentionRisk
+          ? "retention_risk"
+          : stale
+            ? "stale"
+            : "ok";
+    const previous = previousBySource.get(source.id);
+    const snapshot: SourceHealthSnapshotRecord = {
+      id: previous?.id ?? `source-health:${userId}:${source.id}`,
+      userId,
+      source: source.id,
+      status,
+      details: {
+        displayName: source.displayName,
+        eventCount: sourceEvents.length,
+        retentionDays: null,
+      },
+      createdAt: previous?.createdAt ?? now,
+    };
+    if (lastRun) snapshot.lastSuccessfulSyncAt = lastRun;
+    if (lastEventMs) snapshot.lastEventAt = new Date(lastEventMs).toISOString();
+    const recommendedAction =
+      sourceEvents.length > 0 || sourceRuns.length > 0
+        ? sourceHealthAction(status, source.id)
+        : undefined;
+    if (recommendedAction) snapshot.recommendedAction = recommendedAction;
+    return snapshot;
+  });
+}
+
+function currentSyncRunsForUser(data: TokSyncData, userId: string) {
+  const devicesById = new Map(
+    data.devices
+      .filter((device) => device.userId === userId)
+      .map((device) => [device.id, device] as const),
+  );
+  return data.syncRuns.filter((run) => {
+    if (run.userId !== userId) return false;
+    const device = devicesById.get(run.deviceId);
+    return (
+      !device?.dataClearedAt || syncRunActivityAt(run) > device.dataClearedAt
+    );
+  });
+}
+
+function latestDeviceSyncRunAt(
+  data: TokSyncData,
+  userId: string,
+  deviceId: string,
+) {
+  return latest(
+    data.syncRuns
+      .filter((run) => run.userId === userId && run.deviceId === deviceId)
+      .map(syncRunActivityAt),
+  );
+}
+
+function syncRunActivityAt(run: SyncRunRecord) {
+  return run.finishedAt || run.startedAt;
+}
+
 function pruneDeviceCodesInData(data: TokSyncData) {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const before = data.deviceCodes.length;
@@ -2805,6 +2912,44 @@ function mergeIssueView(issue: MergeIssueRecord) {
     createdAt: issue.createdAt,
     resolvedAt: issue.resolvedAt,
   };
+}
+
+function dashboardStatusFromData(
+  data: TokSyncData,
+  userId: string,
+  syncRuns: SyncRunRecord[],
+  sourceHealthSnapshots = data.sourceHealthSnapshots,
+) {
+  const latestRun = [...syncRuns].sort(compareSyncRunsByStartedAtDesc).at(0);
+  const unresolvedMergeIssues = data.mergeIssues.filter(
+    (issue) => issue.userId === userId && issue.status === "open",
+  );
+  const sourceHealthIssues = sourceHealthSnapshots.filter(
+    (snapshot) => snapshot.userId === userId && snapshot.recommendedAction,
+  );
+  const latestRunErrors = latestRun?.errorCount ?? 0;
+  const totalIssues =
+    unresolvedMergeIssues.length + latestRunErrors + sourceHealthIssues.length;
+
+  return {
+    state: latestRun
+      ? totalIssues > 0
+        ? ("needs_attention" as const)
+        : ("healthy" as const)
+      : ("waiting_for_sync" as const),
+    lastSyncAt: latestRun?.finishedAt || latestRun?.startedAt,
+    latestRun: latestRun ? syncRunView(latestRun) : null,
+    counts: {
+      latestRunErrors,
+      mergeIssues: unresolvedMergeIssues.length,
+      sourceHealthIssues: sourceHealthIssues.length,
+    },
+    totalIssues,
+  };
+}
+
+function compareSyncRunsByStartedAtDesc(a: SyncRunRecord, b: SyncRunRecord) {
+  return b.startedAt.localeCompare(a.startedAt);
 }
 
 function buildProfileStats(

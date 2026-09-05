@@ -10,10 +10,9 @@ import {
   RefreshCw,
   RotateCw,
 } from "lucide-react";
+import { clientApiFetch } from "../lib/client-api";
 import type { VaultExportRecord } from "../lib/vault-ui";
 import { normalizeVaultExports, summarizeVaultPreview } from "../lib/vault-ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 export function VaultConsole({
   initialExports,
@@ -71,18 +70,14 @@ export function VaultConsole({
     }
   }
 
-  function headers() {
-    return { "X-TokSync-User": username };
-  }
-
   async function refreshExports() {
     startTransition(async () => {
       try {
-        const response = await fetch(`${API_URL}/v1/vault/exports`, {
-          cache: "no-store",
-          credentials: "include",
-          headers: headers(),
-        });
+        const response = await clientApiFetch(
+          "/v1/vault/exports",
+          { cache: "no-store" },
+          username,
+        );
         const payload = await response.json().catch(() => null);
 
         if (!response.ok) {
@@ -123,21 +118,23 @@ export function VaultConsole({
 
     startTransition(async () => {
       try {
-        const response = await fetch(`${API_URL}/v1/vault/exports`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...headers(),
+        const response = await clientApiFetch(
+          "/v1/vault/exports",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              format: "toksync-vault-v1",
+              includePublicCache,
+              includeReceipts,
+              includeContent: false,
+              recoveryPassphrase,
+            }),
           },
-          body: JSON.stringify({
-            format: "toksync-vault-v1",
-            includePublicCache,
-            includeReceipts,
-            includeContent: false,
-            recoveryPassphrase,
-          }),
-        });
+          username,
+        );
         const payload = await response.json().catch(() => null);
 
         if (!response.ok) {
@@ -195,18 +192,20 @@ export function VaultConsole({
         const vaultPayload = await loadVaultPayload();
         if (!vaultPayload) return;
 
-        const response = await fetch(`${API_URL}/v1/vault/imports/preview`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...headers(),
+        const response = await clientApiFetch(
+          "/v1/vault/imports/preview",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              payload: vaultPayload,
+              recoveryPassphrase: importPassphrase,
+            }),
           },
-          body: JSON.stringify({
-            payload: vaultPayload,
-            recoveryPassphrase: importPassphrase,
-          }),
-        });
+          username,
+        );
         const payload = await response.json().catch(() => null);
 
         if (!response.ok) {
@@ -243,23 +242,33 @@ export function VaultConsole({
       return;
     }
 
+    const confirmed = window.confirm(
+      "Restore importable metrics from this vault? Existing matching events will be skipped, but new private usage rows and aggregates may be added.",
+    );
+    if (!confirmed) {
+      setNotice("warn", "Vault restore cancelled; no data was changed.");
+      return;
+    }
+
     startTransition(async () => {
       try {
         const vaultPayload = await loadVaultPayload();
         if (!vaultPayload) return;
 
-        const response = await fetch(`${API_URL}/v1/vault/imports`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...headers(),
+        const response = await clientApiFetch(
+          "/v1/vault/imports",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              payload: vaultPayload,
+              recoveryPassphrase: importPassphrase,
+            }),
           },
-          body: JSON.stringify({
-            payload: vaultPayload,
-            recoveryPassphrase: importPassphrase,
-          }),
-        });
+          username,
+        );
         const payload = await response.json().catch(() => null);
 
         if (!response.ok) {
@@ -291,13 +300,10 @@ export function VaultConsole({
   async function downloadExport(entry: VaultExportRecord) {
     startTransition(async () => {
       try {
-        const response = await fetch(
-          `${API_URL}/v1/vault/exports/${entry.id}`,
-          {
-            cache: "no-store",
-            credentials: "include",
-            headers: headers(),
-          },
+        const response = await clientApiFetch(
+          `/v1/vault/exports/${entry.id}`,
+          { cache: "no-store" },
+          username,
         );
         const payload = await response.json().catch(() => null);
         if (!response.ok) {

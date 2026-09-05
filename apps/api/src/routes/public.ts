@@ -286,7 +286,7 @@ function svgResponse(svg: string, status = 200) {
         "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy":
-        "default-src 'none'; style-src 'unsafe-inline';",
+        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline';",
     },
   });
 }

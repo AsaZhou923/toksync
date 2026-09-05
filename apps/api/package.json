@@ -15,17 +15,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.1",
+    "@hono/node-server": "^1.19.15",
     "@toksync/db": "workspace:*",
     "@toksync/embed-renderer": "workspace:*",
     "@toksync/pricing": "workspace:*",
     "@toksync/shared": "workspace:*",
-    "hono": "^4.7.10"
+    "hono": "^4.12.34"
   },
   "devDependencies": {
     "@types/node": "^22.15.18",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
-    "vitest": "^3.1.3"
+    "vitest": "^3.2.6"
   }
 }

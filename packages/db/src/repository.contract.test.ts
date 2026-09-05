@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { UsageEventV1 } from "@toksync/shared";
 import { FileTokSyncStore } from "./store";
 import { TokSyncRepository } from "./repository";
@@ -97,6 +97,55 @@ export function repositoryContractTests(
       expect(repo.dashboardSummary("demo")?.totals.costUsd).toBe(0.01);
     });
 
+    it("returns compact dashboard status counts from stored sync state", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-02-03T13:00:00.000Z"));
+        const repo = createRepository();
+        const auth = authorizeDevice(repo);
+        const partial = repo.ingestUsageBatch(
+          auth.deviceToken,
+          usageBatch(
+            auth.deviceId,
+            [
+              usageEvent(auth.deviceId, {
+                dedupKey: "codex:compact-status-valid",
+                sourceMessageId: "compact-status-valid",
+              }),
+              usageEvent("other-device", {
+                dedupKey: "codex:compact-status-wrong-device",
+                sourceMessageId: "compact-status-wrong-device",
+              }),
+            ],
+            "compact-status-run",
+          ),
+        );
+
+        expect(partial.ok).toBe(true);
+        if (!partial.ok) throw new Error("partial ingest failed");
+
+        const overview = repo.dashboardOverview("demo");
+
+        expect(overview?.status?.state).toBe("needs_attention");
+        expect(overview?.status?.latestRun).toMatchObject({
+          clientRunId: "compact-status-run",
+          status: "partial",
+          insertedCount: 1,
+          errorCount: 1,
+        });
+        expect(overview?.status?.counts.latestRunErrors).toBe(1);
+        expect(overview?.status?.counts.mergeIssues).toBe(0);
+        expect(overview?.status?.counts.sourceHealthIssues).toBe(0);
+        expect(overview?.status?.totalIssues).toBe(
+          (overview?.status?.counts.latestRunErrors ?? 0) +
+            (overview?.status?.counts.mergeIssues ?? 0) +
+            (overview?.status?.counts.sourceHealthIssues ?? 0),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("refreshes public aggregate cache on opt-in changes without widening private defaults", () => {
       const repo = createRepository();
       const auth = authorizeDevice(repo);
@@ -172,6 +221,21 @@ export function repositoryContractTests(
         limitUsd: 5,
         enabled: true,
       });
+      repo.setPublicProfile("demo", {
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: false,
+        showModelBreakdown: false,
+      });
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toEqual(
+        expect.any(String),
+      );
+      expect(repo.dashboardOverview("demo")?.summary.lastSyncAt).toEqual(
+        expect.any(String),
+      );
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toEqual(
+        expect.any(String),
+      );
 
       repo.deleteDeviceData("demo", auth.deviceId);
 
@@ -179,6 +243,11 @@ export function repositoryContractTests(
         expect.objectContaining({ type: "budget_exceeded", deltaUsd: 1 }),
       ]);
       expect(repo.dashboardSummary("demo")?.totals.tokens).toBe(0);
+      expect(repo.dashboardSummary("demo")?.lastSyncAt).toBeUndefined();
+      expect(
+        repo.dashboardOverview("demo")?.summary.lastSyncAt,
+      ).toBeUndefined();
+      expect(repo.getPublicStats("demo")?.lastSyncAt).toBeUndefined();
       expect(repo.listCostGuardrails("demo")?.anomalies).toEqual([]);
     });
 

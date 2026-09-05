@@ -34,13 +34,13 @@ export default function DocsPage() {
             Registry-backed collectors plus the parity watchlist.
           </p>
         </a>
-        <a className="card" href="/app/vault">
+        <a className="card" href="/app/settings?tab=data&view=vault">
           <h2 className="section-title">Private Usage Vault</h2>
           <p className="muted">
             Encrypted metrics backup, artifact download, preview, and restore.
           </p>
         </a>
-        <a className="card" href="/app/exports">
+        <a className="card" href="/app/settings?tab=data&view=exports">
           <h2 className="section-title">Local viewer</h2>
           <p className="muted">
             Aggregate-only JSON/CSV inspection. No encrypted artifact or restore
@@ -51,11 +51,11 @@ export default function DocsPage() {
           <h2 className="section-title">README embed</h2>
           <p className="muted">Public badge and profile-card snippets.</p>
         </a>
-        <a className="card" href="/app/proof-pack">
+        <a className="card" href="/app/share?tab=proof">
           <h2 className="section-title">Public Proof Pack</h2>
           <p className="muted">Digest-backed public proof from opt-in cache.</p>
         </a>
-        <a className="card" href="/app/wrapped">
+        <a className="card" href="/app/share?tab=wrapped">
           <h2 className="section-title">Wrapped</h2>
           <p className="muted">
             Private recap plus public low-sensitivity card.

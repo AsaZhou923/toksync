@@ -1,9 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import ActivityPage from "./activity/page";
-import ModelsPage from "./models/page";
-import ProjectsPage from "./projects/page";
+import DashboardPage from "./page";
 
 vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
@@ -23,14 +21,20 @@ describe("sortable dashboard detail pages", () => {
 
   it("sorts activity by date descending by default and tokens on request", async () => {
     const defaultHtml = renderToStaticMarkup(
-      await ActivityPage({ searchParams: Promise.resolve({}) }),
+      await DashboardPage({
+        searchParams: Promise.resolve({ view: "activity" }),
+      }),
     );
     expectInOrder(defaultHtml, ["2026-05-24", "2026-05-23", "2026-05-22"]);
-    expect(defaultHtml).toContain("?sort=date&amp;dir=asc");
+    expect(defaultHtml).toContain("?view=activity&amp;sort=date&amp;dir=asc");
 
     const tokenAscHtml = renderToStaticMarkup(
-      await ActivityPage({
-        searchParams: Promise.resolve({ sort: "tokens", dir: "asc" }),
+      await DashboardPage({
+        searchParams: Promise.resolve({
+          view: "activity",
+          sort: "tokens",
+          dir: "asc",
+        }),
       }),
     );
     expectInOrder(tokenAscHtml, ["2026-05-22", "2026-05-23", "2026-05-24"]);
@@ -38,13 +42,19 @@ describe("sortable dashboard detail pages", () => {
 
   it("sorts models by usage by default and model name on request", async () => {
     const defaultHtml = renderToStaticMarkup(
-      await ModelsPage({ searchParams: Promise.resolve({}) }),
+      await DashboardPage({
+        searchParams: Promise.resolve({ view: "models" }),
+      }),
     );
     expectInOrder(defaultHtml, ["gpt-5.5", "gpt-5.4", "claude-3"]);
 
     const modelAscHtml = renderToStaticMarkup(
-      await ModelsPage({
-        searchParams: Promise.resolve({ sort: "model", dir: "asc" }),
+      await DashboardPage({
+        searchParams: Promise.resolve({
+          view: "models",
+          sort: "model",
+          dir: "asc",
+        }),
       }),
     );
     expectInOrder(modelAscHtml, ["claude-3", "gpt-5.4", "gpt-5.5"]);
@@ -52,13 +62,19 @@ describe("sortable dashboard detail pages", () => {
 
   it("sorts projects by usage by default and label on request", async () => {
     const defaultHtml = renderToStaticMarkup(
-      await ProjectsPage({ searchParams: Promise.resolve({}) }),
+      await DashboardPage({
+        searchParams: Promise.resolve({ view: "projects" }),
+      }),
     );
     expectInOrder(defaultHtml, ["alpha", "beta", "zeta"]);
 
     const projectDescHtml = renderToStaticMarkup(
-      await ProjectsPage({
-        searchParams: Promise.resolve({ sort: "project", dir: "desc" }),
+      await DashboardPage({
+        searchParams: Promise.resolve({
+          view: "projects",
+          sort: "project",
+          dir: "desc",
+        }),
       }),
     );
     expectInOrder(projectDescHtml, ["zeta", "beta", "alpha"]);

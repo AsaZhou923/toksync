@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -13,11 +13,18 @@ export default defineConfig({
     ],
     // tests/e2e/ and tests/visual/ use .spec.ts with Playwright runner
     // (pnpm test:e2e / pnpm test:visual), not vitest.
-    exclude: ["**/node_modules/**", "**/.next/**", "**/dist/**"],
+    exclude: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/.tmp/**"],
     coverage: {
       reportsDirectory: "coverage",
       reporter: ["text", "lcov"],
-      exclude: ["**/node_modules/**", "**/.next/**", "**/dist/**"],
+      exclude: [
+        ...coverageConfigDefaults.exclude,
+        "**/.next/**",
+        "**/dist/**",
+        "**/.tmp/**",
+        "**/.omx/**",
+        "**/output/**",
+      ],
     },
   },
 });

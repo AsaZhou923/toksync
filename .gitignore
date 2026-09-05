@@ -7,6 +7,7 @@ coverage/
 .claude/
 .env
 .tmp/
+.toksync-playwright-*.json
 .playwright-mcp/
 output/
 *.tsbuildinfo

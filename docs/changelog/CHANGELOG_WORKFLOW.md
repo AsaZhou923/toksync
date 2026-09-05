@@ -235,7 +235,7 @@ YYYY-MM-DD-short-topic
 3. 只保留本次真正涉及的模块章节；没有变化的章节删除。
 4. `## 影响文件` 只写本次改动真正涉及的文件。
 5. `## 验证` 里写实际执行过或应该执行的命令；未执行的命令必须标明未执行。
-6. 不要把计划中的 leaderboard、billing、content sync 等未来功能写成已实现。
+6. 区分已实现的 opt-in leaderboard 与尚未实现的 leaderboard 扩展、billing、content sync 等未来功能，不把计划写成当前能力。
 
 ### 5. 同步外部 Update Logs 归档
 
@@ -346,6 +346,7 @@ Web UI 或 public SVG 变化时补充：
 pnpm --filter @toksync/web typecheck
 pnpm build
 pnpm test:e2e
+pnpm test:e2e:hosted
 pnpm test:visual
 ```
 
@@ -354,6 +355,8 @@ pnpm test:visual
 ```powershell
 pnpm test:full
 ```
+
+代码安全审查或依赖变更时另外执行 `pnpm audit --prod`。记录公告严重度、适用条件和修复后的审计结果；公告命中不等于当前路由可利用。升级现有依赖后重新运行相关验证，不将升级前的结果当成升级后的证据。
 
 ### 9. 最终复核
 

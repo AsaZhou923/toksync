@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { formatCompactNumber } from "@toksync/shared";
 import {
   Globe2,
@@ -18,8 +18,7 @@ import type {
   LeaderboardRow,
   PublicProfileState,
 } from "../lib/api";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { clientApiFetch } from "../lib/client-api";
 
 const METRIC_OPTIONS: Array<{
   value: LeaderboardMetric;
@@ -89,7 +88,9 @@ export function LeaderboardConsole({
           text: "The connected API did not serve the v0.3 leaderboard contract. Rankings will render when the API exposes public aggregate rows.",
         },
   );
-  const [isPending, startTransition] = useTransition();
+  const [pendingAction, setPendingAction] = useState<
+    "reload" | "opt-in" | null
+  >(null);
 
   const visibleRows = rows.filter((row) => {
     const query = search.trim().toLowerCase();
@@ -103,16 +104,18 @@ export function LeaderboardConsole({
   const publicProfileEnabled = publicProfile.enabled;
   const canSaveOptIn = publicProfileEnabled && initialAvailable;
 
-  function reload(nextMetric = metric, nextPeriod = period) {
-    if (!initialAvailable) return;
+  async function reload(nextMetric = metric, nextPeriod = period) {
+    if (!initialAvailable || pendingAction) return;
 
-    startTransition(async () => {
-      const response = await fetch(
-        `${API_URL}/v1/leaderboard?metric=${nextMetric}&period=${nextPeriod}&limit=50&currentUser=${encodeURIComponent(username)}`,
+    setPendingAction("reload");
+    setNotice({ tone: "warn", text: "Refreshing leaderboard..." });
+    try {
+      const response = await clientApiFetch(
+        `/v1/leaderboard?metric=${nextMetric}&period=${nextPeriod}&limit=50&currentUser=${encodeURIComponent(username)}`,
         {
           cache: "no-store",
-          headers: { "X-TokSync-User": username },
         },
+        username,
       );
       const payload = await response.json().catch(() => null);
 
@@ -135,10 +138,18 @@ export function LeaderboardConsole({
         tone: "good",
         text: "Leaderboard refreshed from public aggregate data.",
       });
-    });
+    } catch {
+      setNotice({
+        tone: "stop",
+        text: "Leaderboard refresh failed. Check your connection and try again.",
+      });
+    } finally {
+      setPendingAction(null);
+    }
   }
 
-  function saveOptIn(nextEnabled: boolean) {
+  async function saveOptIn(nextEnabled: boolean) {
+    if (pendingAction) return;
     if (!canSaveOptIn) {
       setNotice({
         tone: "warn",
@@ -149,17 +160,22 @@ export function LeaderboardConsole({
       return;
     }
 
-    startTransition(async () => {
-      const response = await fetch(`${API_URL}/v1/leaderboard/opt-in`, {
-        method: "POST",
-        body: JSON.stringify({
-          enabled: nextEnabled,
-        }),
-        headers: {
-          "Content-Type": "application/json",
-          "X-TokSync-User": username,
+    setPendingAction("opt-in");
+    setNotice({ tone: "warn", text: "Saving leaderboard preference..." });
+    try {
+      const response = await clientApiFetch(
+        "/v1/leaderboard/opt-in",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            enabled: nextEnabled,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      });
+        username,
+      );
       const payload = (await response.json().catch(() => null)) as
         | LeaderboardOptInResponse
         | { error?: { message?: string } }
@@ -187,7 +203,14 @@ export function LeaderboardConsole({
           ? "Leaderboard opt-in saved. Rankings stay public-only and update on the next public refresh."
           : "Leaderboard opt-in disabled. Future public refreshes should remove this account from rankings.",
       });
-    });
+    } catch {
+      setNotice({
+        tone: "stop",
+        text: "Leaderboard opt-in update failed. Check your connection and try again.",
+      });
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   return (
@@ -273,16 +296,16 @@ export function LeaderboardConsole({
             <button
               className="btn primary"
               type="button"
-              disabled={!canSaveOptIn || isPending}
+              disabled={!canSaveOptIn || Boolean(pendingAction)}
               onClick={() => saveOptIn(true)}
             >
               <Globe2 size={16} />
-              Enable leaderboard
+              {pendingAction === "opt-in" ? "Saving..." : "Enable leaderboard"}
             </button>
             <button
               className="btn"
               type="button"
-              disabled={!canSaveOptIn || isPending}
+              disabled={!canSaveOptIn || Boolean(pendingAction)}
               onClick={() => saveOptIn(false)}
             >
               <Lock size={16} />
@@ -296,7 +319,9 @@ export function LeaderboardConsole({
             ) : null}
           </div>
           {notice ? (
-            <div className={`notice-strip ${notice.tone}`}>{notice.text}</div>
+            <div className={`notice-strip ${notice.tone}`} role="status">
+              {notice.text}
+            </div>
           ) : null}
         </div>
 
@@ -346,6 +371,7 @@ export function LeaderboardConsole({
                 key={option.value}
                 className={`segmented ${period === option.value ? "active" : ""}`}
                 type="button"
+                disabled={Boolean(pendingAction)}
                 onClick={() => reload(metric, option.value)}
               >
                 {option.label}
@@ -359,6 +385,7 @@ export function LeaderboardConsole({
               key={option.value}
               className={`segmented ${metric === option.value ? "active" : ""}`}
               type="button"
+              disabled={Boolean(pendingAction)}
               onClick={() => reload(option.value, period)}
             >
               {option.label}
@@ -369,16 +396,17 @@ export function LeaderboardConsole({
             type="search"
             placeholder="Filter loaded users"
             value={search}
+            disabled={pendingAction === "reload"}
             onChange={(event) => setSearch(event.target.value)}
           />
           <button
             className="btn"
             type="button"
-            disabled={!initialAvailable || isPending}
+            disabled={!initialAvailable || Boolean(pendingAction)}
             onClick={() => reload()}
           >
             <RefreshCw size={16} />
-            Refresh
+            {pendingAction === "reload" ? "Refreshing..." : "Refresh"}
           </button>
         </div>
         {visibleRows.length === 0 ? (

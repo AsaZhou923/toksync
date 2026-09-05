@@ -25,6 +25,7 @@ export function PublicEmbedPanel({
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [metric, setMetric] = useState<"tokens" | "cost">("tokens");
   const [compact, setCompact] = useState(false);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   function handleSaved(next: PublicProfileState) {
     setProfile(next);
@@ -38,19 +39,37 @@ export function PublicEmbedPanel({
   const previewBadgeUrl = withCacheKey(badgeUrl, cacheKey);
   const previewCardUrl = withCacheKey(cardUrl, cacheKey);
   const previewShareUrl = withCacheKey(shareUrl, cacheKey);
+  const recommendedSnippet = `![TokSync profile](${cardUrl})`;
+  const badgeSnippet = `![TokSync](${badgeUrl})`;
+  const shareSnippet = `![TokSync share](${shareUrl})`;
+
+  async function copySnippet(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyMessage(`${label} copied`);
+    } catch {
+      setCopyMessage("Copy failed");
+    }
+  }
 
   return (
     <>
-      <section className="grid grid-2">
+      <section className="grid grid-2" data-testid="recommended-share-flow">
         <PublicProfileForm
           initial={initial}
           username={username}
-          viewPath={profileUrl}
           onSaved={handleSaved}
+          variant="profile-only"
         />
         <div className="card grid">
           <div className="metric-row">
-            <h2 className="section-title">Preview</h2>
+            <div>
+              <h2 className="section-title">Recommended profile card</h2>
+              <p className="muted">
+                One aggregate card for your README. Private events and paths
+                never enter the public cache.
+              </p>
+            </div>
             <span className="pill" data-testid="embed-status">
               <span
                 className={profile.enabled ? "status-dot" : "status-dot off"}
@@ -58,7 +77,52 @@ export function PublicEmbedPanel({
               {profile.enabled ? "public" : "private"}
             </span>
           </div>
+          {apiReady && profile.enabled ? (
+            <div className="svg-preview" data-testid="recommended-profile-card">
+              <img src={previewCardUrl} alt="TokSync profile card preview" />
+            </div>
+          ) : !profile.enabled ? (
+            <div className="empty-state" data-testid="public-disabled-share">
+              Enable and save the public profile before publishing this card.
+            </div>
+          ) : (
+            <div className="empty-state">
+              The API preview is offline. Try again after the local API is
+              available.
+            </div>
+          )}
+          <div className="command" data-testid="recommended-card-snippet">
+            {recommendedSnippet}
+          </div>
           <div className="toolbar">
+            <button
+              className="btn primary"
+              data-share-copy-action
+              data-testid="recommended-card-copy"
+              disabled={!profile.enabled}
+              type="button"
+              onClick={() => copySnippet("Profile card", recommendedSnippet)}
+            >
+              <Copy size={16} />
+              Copy
+            </button>
+            {copyMessage ? (
+              <span className="pill good" role="status">
+                {copyMessage}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <details className="card advanced-disclosure">
+        <summary>Badge and card options</summary>
+        <div className="grid advanced-disclosure-body">
+          <p className="muted">
+            Change theme, metric, or compact rendering only when the recommended
+            profile card is not enough.
+          </p>
+          <div className="toolbar" aria-label="Advanced card options">
             <button
               className={`segmented ${theme === "dark" ? "active" : ""}`}
               type="button"
@@ -80,7 +144,6 @@ export function PublicEmbedPanel({
               type="button"
               onClick={() => setMetric("tokens")}
             >
-              <Copy size={14} />
               Tokens
             </button>
             <button
@@ -89,57 +152,64 @@ export function PublicEmbedPanel({
               onClick={() => setMetric("cost")}
             >
               <MonitorCog size={14} />
-              Cost
+              Cost estimate
             </button>
             <button
               className={`segmented ${compact ? "active" : ""}`}
               type="button"
               onClick={() => setCompact((current) => !current)}
             >
-              <Eye size={14} />
               Compact
             </button>
           </div>
-          {apiReady ? (
-            <>
+          {apiReady && profile.enabled ? (
+            <div className="grid grid-2">
               <div className="svg-preview">
                 <img src={previewBadgeUrl} alt="TokSync badge preview" />
               </div>
               <div className="svg-preview">
-                <img src={previewCardUrl} alt="TokSync profile card preview" />
-              </div>
-              <div className="svg-preview">
                 <img src={previewShareUrl} alt="TokSync share image preview" />
               </div>
-            </>
-          ) : (
-            <div className="empty-state">
-              API preview is offline. Query controls and snippets stay ready,
-              but SVG preview waits for the local API to come back.
             </div>
-          )}
+          ) : null}
+          <div className="snippet-grid">
+            <div className="command" data-testid="badge-snippet">
+              {badgeSnippet}
+            </div>
+            <div className="command" data-testid="share-snippet">
+              {shareSnippet}
+            </div>
+          </div>
+          <div className="toolbar">
+            <button
+              className="btn"
+              disabled={!profile.enabled}
+              type="button"
+              onClick={() => copySnippet("Badge", badgeSnippet)}
+            >
+              <Copy size={16} />
+              Copy badge
+            </button>
+            <button
+              className="btn"
+              disabled={!profile.enabled}
+              type="button"
+              onClick={() => copySnippet("Share image", shareSnippet)}
+            >
+              <Copy size={16} />
+              Copy share image
+            </button>
+            <a className="btn" href={profileUrl}>
+              <Eye size={16} />
+              Open public profile
+            </a>
+          </div>
         </div>
-      </section>
-      <div className="snippet-grid">
-        <div className="command" data-testid="badge-snippet">
-          {`![TokSync](${badgeUrl})`}
-        </div>
-        <div className="command" data-testid="card-snippet">
-          {`![TokSync profile](${cardUrl})`}
-        </div>
-        <div className="command" data-testid="share-snippet">
-          {`![TokSync share](${shareUrl})`}
-        </div>
-        <a className="btn" href={profileUrl}>
-          <Eye size={16} />
-          Open public profile
-        </a>
-      </div>
+      </details>
     </>
   );
 }
 
 function withCacheKey(url: string, cacheKey: number) {
-  if (cacheKey === 0) return url;
   return `${url}${url.includes("?") ? "&" : "?"}preview=${cacheKey}`;
 }

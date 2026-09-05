@@ -1,5 +1,3 @@
-import { redirect } from "next/navigation";
+import { createCompatRedirectPage } from "../../../lib/compat-redirect";
 
-export default function BudgetsPage() {
-  redirect("/app/guardrails");
-}
+export default createCompatRedirectPage("/app", { view: "costs" });

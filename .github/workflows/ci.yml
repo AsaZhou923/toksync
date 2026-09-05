@@ -57,6 +57,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Audit dependencies
+        run: pnpm audit
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
@@ -87,6 +90,9 @@ jobs:
       - name: E2E tests
         run: pnpm test:e2e
 
+      - name: Hosted session E2E tests
+        run: pnpm test:e2e:hosted
+
       - name: Visual tests
         run: pnpm test:visual
 
@@ -99,6 +105,5 @@ jobs:
         with:
           name: test-artifacts
           path: |
-            test-results/
-            playwright-report/
+            output/playwright/runs/
           retention-days: 7

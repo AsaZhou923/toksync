@@ -2,20 +2,35 @@
 
 [English](./README.md)
 
-TokSync v0.6 是面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
+TokSync 是面向 AI coding 工具的 metrics-only telemetry hub。它跨设备汇总 token、成本估算、模型、来源、设备和 workspace label 等用量指标，但默认不上传 prompt、助手回复、工具参数、工具输出、文件内容、密钥或原始项目路径。
 
-当前仓库是可本地运行的 pnpm/Turbo monorepo。本地开发闭环仍以 `FileTokSyncStore` 为主，Postgres + Drizzle 是 hosted 目标；v0.4 已补齐 `vault_exports` SQL/Drizzle schema 和 vault ledger adapter。
+当前仓库是可本地运行的 pnpm/Turbo monorepo。本地开发闭环以 `FileTokSyncStore` 为主；Postgres runtime、Drizzle parity 和 worker queue 仍是 parked/决策项，不是默认运行路径。
 
 ## 当前能力
 
-- CLI agent：`login`、`logout`、`status`、`sources list`、`report models/sources/daily/monthly/hourly`、`sync --dry-run`、`sync`，支持 `tsk_` user API token/headless sync，并将本地 `deviceToken` 以 AES-GCM fallback 加密保存。
+- CLI agent：`login`、`logout`、`status`、`sources list`、`report models/sources/daily/monthly/hourly`、`sync --dry-run`、`sync --yes`，支持 `tsk_` user API token/headless sync，并将本地 `deviceToken` 以 AES-GCM fallback 加密保存。
 - Collector：Codex CLI、Claude Code、OpenCode、Cursor usage CSV、GitHub Copilot OTEL JSONL、Gemini CLI tmp chat JSON/JSONL、OpenClaw session/SDK usage logs。
-- API：GitHub OAuth、设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、pricing audit、leaderboard opt-in、metrics JSON/CSV export、Private Usage Vault、Public Proof Pack、Wrapped、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card/share image，并支持 Redis-backed rate limit。
-- Web：dashboard、activity、devices、sources、health、receipts、merge、budgets/guardrails、leaderboard、公开 leaderboard、exports/local viewer、usage vault、Proof Pack、Wrapped、models、projects、sync runs、embed、settings、docs、公开 profile，并启用 CSP/安全响应头。
+- API：48 个 `/v1` handler 加 `GET /health`，覆盖 GitHub OAuth、设备登录、device token、user API token、幂等 usage ingest、dashboard、Sync Privacy Receipt、Source Health Radar、Merge Copilot 摘要、Cost Guardrails、pricing audit、leaderboard opt-in、metrics JSON/CSV export、Private Usage Vault、Public Proof Pack、Wrapped、device revoke/delete、submitted public data deletion、public profile、SVG badge/profile card/share image，并支持 Redis-backed rate limit。
+- Web：一级导航收敛为 Dashboard、Sync、Sources、Share、Settings；旧登录后 app URL 通过兼容跳转进入新任务中心，公开 `/leaderboard`、public API 和 SVG URL 继续保留，并继续启用 CSP/安全响应头。
 - Storage：本地默认 `FileTokSyncStore`；hosted SQL shape 已包含 `vault_exports` ledger。设置 `TOKSYNC_VAULT_ARTIFACT_DIR` 后，vault artifact 可写入私有对象目录，ledger 只保存 storage key 和 digest。
 - 测试：Vitest、Playwright E2E、visual smoke、perf smoke、Turbo typecheck/lint/build。
 
 ## 快速开始
+
+最新审查与修复：[2026-09-05 更新记录](docs/changelog/CHANGELOG.md#2026-09-05-review-and-reliability-hardening)。
+
+连接 agent、预览 metrics-only payload，然后同步：
+
+```bash
+toksync login
+toksync sync --dry-run
+toksync sync
+```
+
+上传前会先显示 event 数、token、成本估算、source、日期范围和 privacy receipt。
+交互式 device login 会要求确认；同步成功后会输出 Dashboard URL。
+
+## 开发者设置
 
 ```bash
 pnpm install
@@ -25,6 +40,12 @@ pnpm db:seed
 pnpm dev
 ```
 
+`pnpm dev` 只启动 Web 和 API。需要 worker 进程时，单独运行：
+
+```bash
+pnpm dev:worker
+```
+
 本地 browser/dev auth 需要显式开启：保留 `.env` 中的
 `TOKSYNC_DEV_AUTH=1`，`--auto-authorize demo` 和基于
 `X-TokSync-User` 的本地 Web 请求才会生效。hosted/prod-like 验证请不设置
@@ -32,22 +53,30 @@ pnpm dev
 
 另开一个终端：
 
-```bash
-pnpm agent login --auto-authorize demo
-pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic
-pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+```powershell
+$onboardingConfig = Join-Path (Get-Location) ".tmp/toksync-onboarding"
+if (Test-Path -LiteralPath $onboardingConfig) {
+  Remove-Item -LiteralPath $onboardingConfig -Recurse -Force
+}
+$env:TOKSYNC_CONFIG_DIR = $onboardingConfig
+corepack pnpm agent login --auto-authorize demo
+corepack pnpm agent sync --dry-run --fixture ./packages/test-fixtures/codex/basic
+corepack pnpm agent sync --fixture ./packages/test-fixtures/codex/basic --yes
 ```
 
 重复同步同一批事件时，TokSync 应该把重复事件计入 `skipped`，而不是重复累计 totals。
 
-Headless/private sync 可使用 user API token：
+Hosted 或 private headless sync 需要配置真实 API endpoint，并使用 user API token：
 
 ```bash
+TOKSYNC_API_URL=https://your-toksync-api.example.com \
 pnpm agent login --token tsk_...
-TOKSYNC_API_TOKEN=tsk_... pnpm agent sync --fixture ./packages/test-fixtures/codex/basic
+TOKSYNC_API_URL=https://your-toksync-api.example.com \
+TOKSYNC_API_TOKEN=tsk_... \
+pnpm agent sync --yes
 ```
 
-`TOKSYNC_API_TOKEN` 只作为当前进程一次性输入，读取后会从 agent 进程环境中清除。设备登录写入本地配置时，`deviceToken` 会保存为 `deviceTokenEncrypted`，使用 AES-256-GCM 和本机 `config.key`；旧的明文配置仍可读取，并会在下次保存时迁移。
+`TOKSYNC_API_TOKEN` 只作为当前进程一次性输入，读取后会从 agent 进程环境中清除。设备登录写入本地配置时，`deviceToken` 会保存为 `deviceTokenEncrypted`，使用 AES-256-GCM 和本机 `config.key`；旧的明文配置仍可读取，并会在下次保存时迁移。device token 在非交互环境上传时必须显式传入 `--yes`；user API token 是明确的 headless 路径。
 
 无需打开 Web dashboard 也可以查看本地报表：
 
@@ -63,6 +92,8 @@ pnpm agent report daily --fixture ./packages/test-fixtures/codex/basic --format 
 | Web     | http://localhost:3000 |
 | API     | http://localhost:4000 |
 | Worker  | http://localhost:4100 |
+
+Worker 地址只在运行 `pnpm dev:worker` 后可用。根目录 `pnpm dev` 只启动 Web 和 API。
 
 ## 隐私边界
 
@@ -81,27 +112,29 @@ pnpm agent report daily --fixture ./packages/test-fixtures/codex/basic --format 
 
 ## v0.6 范围
 
-| 能力                           | 当前状态       | 边界                                                                                                                              |
-| ------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Public label privacy           | 已实现         | project/workspace label 默认私有，显式开启后只展示安全 label                                                                      |
-| Merge Copilot                  | 已实现最小闭环 | 解释 duplicate/replay，不展示原始消息标识                                                                                         |
-| Sync Privacy Receipt           | 已实现最小闭环 | digest、安全字段类别、排除类别                                                                                                    |
-| Source Health Radar            | 已实现最小闭环 | 私有 source 覆盖、最近同步、缺失和保留期风险                                                                                      |
-| GitHub OAuth                   | 已实现第一版   | 首个生产 browser login 路径；email magic link 后置                                                                                |
-| User API token                 | 已实现最小闭环 | 创建/列出/撤销 metadata，明文 token 只在创建响应返回一次                                                                          |
-| Metrics export/local viewer    | 已实现最小闭环 | JSON/CSV 只导出安全 metrics 列                                                                                                    |
-| Submitted public data deletion | 已实现最小闭环 | 清理公开 cache，不删除私有 raw metrics                                                                                            |
-| Cost Guardrails                | 已实现第一版   | 私有预算阈值、cost spike、unknown pricing、budget exceeded                                                                        |
-| Leaderboard                    | 已实现第一版   | public profile + 单独 opt-in，只读取公开聚合 cache；全局榜 only                                                                   |
-| Source parity                  | 已实现第一版   | Cursor CSV、Copilot OTEL、Gemini tmp chats、OpenClaw usage logs；仍保持 metrics-only                                              |
-| Private Usage Vault            | 已实现第一版   | passphrase 加密导出、artifact 下载/存储、import preview、幂等恢复；hosted ledger SQL 已补齐                                       |
-| Phase 0 稳定化门禁             | 已实现         | FileStore repository mutation transaction、parser/component 测试、Agent token 加密、Redis rate limit 开关和 vault 版本不兼容回归  |
-| Public Proof Pack              | 已实现第一版   | `/v1/public-proof/:username` 只读 public aggregate、public-safe daily 和 receipt digest；`/app/proof-pack` 提供控制台视图         |
-| Wrapped                        | 已实现第一版   | `/app/wrapped`、`/v1/wrapped` 私有 summary；`/v1/wrapped/:username` 公开低敏卡片只读 public cache                                 |
-| CLI reports                    | 已实现第一版   | `report` 支持 models、sources、daily、monthly、hourly、table/json 和 source filter，不输出 raw path 或消息标识                    |
-| Public profile/share           | 已实现第一版   | 公开 profile 有 activity graph、section tabs、owner controls、badge/card/share SVG；全部只读 public cache                         |
-| Leaderboard UX                 | 已实现第一版   | `/app/leaderboard` 和公开 `/leaderboard` 支持 period、search、tokens/cost/active days/streak 排序和当前用户排名                   |
-| Settings/pricing UX            | 已实现第一版   | settings 展示 account 状态、copy-once token、last-used/revoke metadata、删除前导出提示；models 页展示 pricing audit/unknown queue |
+当前主线已经进入简化验收：默认 app 路径是 Dashboard、Sync、Sources、Share、Settings。S6 API/repository 收敛已有审计结论但不做无证据删除；S7 Postgres/worker hosted 决策仍单独立项，不随 UI 简化同时执行。
+
+| 能力                           | 当前状态       | 边界                                                                                                                                                                 |
+| ------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public label privacy           | 已实现         | project/workspace label 默认私有，显式开启后只展示安全 label                                                                                                         |
+| Merge Copilot                  | 已实现最小闭环 | 解释 duplicate/replay，不展示原始消息标识                                                                                                                            |
+| Sync Privacy Receipt           | 已实现最小闭环 | digest、安全字段类别、排除类别                                                                                                                                       |
+| Source Health Radar            | 已实现最小闭环 | 私有 source 覆盖、最近同步、缺失和保留期风险                                                                                                                         |
+| GitHub OAuth                   | 已实现第一版   | 首个生产 browser login 路径；email magic link 后置                                                                                                                   |
+| User API token                 | 已实现最小闭环 | 创建/列出/撤销 metadata，明文 token 只在创建响应返回一次                                                                                                             |
+| Metrics export/local viewer    | 已实现最小闭环 | JSON/CSV 只导出安全 metrics 列                                                                                                                                       |
+| Submitted public data deletion | 已实现最小闭环 | 清理公开 cache，不删除私有 raw metrics                                                                                                                               |
+| Cost Guardrails                | 已实现第一版   | 私有预算阈值、cost spike、unknown pricing、budget exceeded                                                                                                           |
+| Leaderboard                    | 已实现第一版   | public profile + 单独 opt-in，只读取公开聚合 cache；全局榜 only                                                                                                      |
+| Source parity                  | 已实现第一版   | Cursor CSV、Copilot OTEL、Gemini tmp chats、OpenClaw usage logs；仍保持 metrics-only                                                                                 |
+| Private Usage Vault            | 已实现第一版   | passphrase 加密导出、artifact 下载/存储、import preview、幂等恢复；hosted ledger SQL 已补齐                                                                          |
+| Phase 0 稳定化门禁             | 已实现         | FileStore repository mutation transaction、parser/component 测试、Agent token 加密、Redis rate limit 开关和 vault 版本不兼容回归                                     |
+| Public Proof Pack              | 已实现第一版   | `/v1/public-proof/:username` 只读 public aggregate、public-safe daily 和 receipt digest；旧 `/app/proof-pack` 兼容跳转到 `/app/share?tab=proof`                      |
+| Wrapped                        | 已实现第一版   | `/v1/wrapped` 私有 summary；`/v1/wrapped/:username` 公开低敏卡片只读 public cache；旧 `/app/wrapped` 兼容跳转到 `/app/share?tab=wrapped`                             |
+| CLI reports                    | 已实现第一版   | `report` 支持 models、sources、daily、monthly、hourly、table/json 和 source filter，不输出 raw path 或消息标识                                                       |
+| Public profile/share           | 已实现第一版   | 公开 profile 有 activity graph、section tabs、owner controls、badge/card/share SVG；主要登录后入口为 `/app/share`，操作模型是开关、Save、Copy；全部只读 public cache |
+| Leaderboard UX                 | 已实现第一版   | 公开 `/leaderboard` 支持 period、search、tokens/cost/active days/streak 排序和当前用户排名；旧 `/app/leaderboard` 兼容跳转到 `/app/share?tab=leaderboard`            |
+| Settings/pricing UX            | 已实现第一版   | settings 展示 account 状态、copy-once token、last-used/revoke metadata、删除前导出提示；models 页展示 pricing audit/unknown queue                                    |
 
 仍不属于当前范围：email magic link、billing/订阅/支付、content sync、全文/语义搜索、eval dataset export、团队版、leaderboard 的 source/model 分榜、全局榜 cursor 分页增强、duplicate_cost_jump 异常解释。
 
@@ -116,10 +149,17 @@ pnpm test
 pnpm test:coverage
 pnpm build
 pnpm test:e2e
+pnpm test:e2e:hosted
 pnpm test:visual
 pnpm test:perf
 pnpm test:full
 ```
+
+日常验证请使用根目录 Playwright wrapper：`pnpm test:e2e`、
+`pnpm test:e2e:hosted` 和 `pnpm test:visual`。它们会为每次运行分配隔离的
+API/Web 端口、JSON store、agent config、Next output 和 Playwright output。
+除非手动为每次运行设置独立的 `TOKSYNC_PLAYWRIGHT_*` 路径与端口，否则不支持
+直接并发运行 `playwright test`。
 
 数据库/开发数据：
 

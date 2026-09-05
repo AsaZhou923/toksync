@@ -3,12 +3,20 @@ import { deviceFingerprint, type AgentConfig } from "./config";
 import {
   buildUsageReport,
   buildLocalReceipt,
+  dashboardUrlFromApiUrl,
+  ensureUploadAllowed,
+  formatCollectWarnings,
+  formatStatus,
+  formatDashboardUrl,
+  formatSyncSummary,
+  formatSyncUploadResult,
   chunk,
   chunkForUpload,
   formatUsageReport,
   parseReportFormat,
   parseReportKind,
   resolveWriteToken,
+  shouldSkipSyncConfirmation,
   summarizeSyncResponses,
 } from "./index";
 import type { UsageEventV1 } from "@toksync/shared";
@@ -98,6 +106,327 @@ describe("agent CLI helpers", () => {
       expect.stringContaining("TOKSYNC_API_TOKEN"),
     );
     expect(resolveWriteToken("tsd_config")).toBe("tsd_config");
+  });
+
+  it("formats login-oriented status without dumping raw sync state JSON", () => {
+    expect(formatStatus(baseConfig)).toBe(
+      [
+        "API: http://localhost:4000",
+        "Connection: not connected",
+        "Next: toksync login",
+      ].join("\n"),
+    );
+
+    expect(
+      formatStatus(
+        {
+          ...baseConfig,
+          deviceId: "private-device-id",
+          deviceName: "laptop",
+          deviceToken: "tsd_private_device_token",
+          username: "demo",
+        },
+        {
+          deviceId: "private-device-id",
+          workspaceKeyHash: "workspace-hash-should-not-print",
+          sourceSessionId: "session-should-not-print",
+          sourceMessageId: "message-should-not-print",
+          lastAcceptedRunAt: "2026-01-02T03:04:05.000Z",
+          knownSources: {
+            codex: {
+              eventCount: 2,
+              lastEventAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+            },
+          },
+        },
+      ),
+    ).toBe(
+      [
+        "API: http://localhost:4000",
+        "Connection: connected as demo",
+        "Device: laptop",
+        "Last sync: 2026-01-02T03:04:05.000Z",
+        "Sources: codex 2 events, last event 2026-01-02T03:04:05.000Z",
+        "Issues: none reported by sync state",
+      ].join("\n"),
+    );
+    expect(
+      formatStatus(
+        {
+          ...baseConfig,
+          deviceId: "private-device-id",
+          deviceName: "laptop",
+          deviceToken: "tsd_private_device_token",
+          username: "demo",
+        },
+        {
+          deviceId: "private-device-id",
+          workspaceKeyHash: "workspace-hash-should-not-print",
+          sourceSessionId: "session-should-not-print",
+          sourceMessageId: "message-should-not-print",
+          lastAcceptedRunAt: "2026-01-02T03:04:05.000Z",
+          knownSources: { codex: { eventCount: 2, lastEventAt: 0 } },
+        },
+      ),
+    ).not.toMatch(
+      /private-device-id|tsd_private|workspace-hash|session-should|message-should/,
+    );
+    expect(
+      formatStatus(
+        {
+          ...baseConfig,
+          deviceToken: "tsd_private_device_token",
+          username: "demo",
+        },
+        undefined,
+        '500 {"token":"tsd_private_device_token","path":"C:\\Users\\asa\\private","sourceSessionId":"session-should-not-print"}',
+      ),
+    ).toBe(
+      [
+        "API: http://localhost:4000",
+        "Connection: connected as demo",
+        "Device: device",
+        "Sync state: unavailable",
+      ].join("\n"),
+    );
+
+    expect(
+      formatStatus({
+        ...baseConfig,
+        deviceId: "headless-1",
+        deviceToken: "tsk_user",
+      }),
+    ).toContain("Connection: user API token configured");
+  });
+
+  it("formats sync summaries as metrics-only text", () => {
+    const summary = {
+      eventCount: 3,
+      tokens: 42,
+      costUsd: 0.000123,
+      dateStart: "2026-01-01",
+      dateEnd: "2026-01-02",
+      sources: { codex: 2, claude: 1 },
+      models: { "gpt-5.4": 3 },
+    };
+    const receipt = {
+      payloadDigest: "sha256:test",
+      uploadedFields: [],
+      excludedFields: ["conversation content", "raw project paths"],
+    };
+
+    expect(formatSyncSummary(summary, receipt)).toBe(
+      [
+        "Events: 3",
+        "Tokens: 42",
+        "Cost estimate: $0.0001",
+        "Date range: 2026-01-01 to 2026-01-02",
+        "Sources: claude 1, codex 2",
+        "Receipt digest: sha256:test",
+        "Receipt excludes: conversation content, raw project paths",
+      ].join("\n"),
+    );
+  });
+
+  it("formats the post-sync dashboard URL without private identifiers", () => {
+    expect(formatDashboardUrl(baseConfig)).toBe(
+      "Dashboard: http://localhost:3000/app",
+    );
+    expect(
+      formatDashboardUrl({
+        ...baseConfig,
+        apiUrl: "https://api.example.test/v1",
+      }),
+    ).toBe("Dashboard: https://api.example.test/app");
+    expect(
+      formatDashboardUrl({
+        ...baseConfig,
+        apiUrl: "https://api.example.test/v1?token=should-not-print",
+        deviceToken: "tsd_private_device_token",
+        deviceId: "private-device-id",
+      }),
+    ).not.toMatch(/token=|tsd_private|private-device-id/);
+    expect(
+      formatDashboardUrl({ ...baseConfig, apiUrl: "file:///tmp/toksync" }),
+    ).toBeUndefined();
+  });
+
+  it("sanitizes collector warnings before printing them", () => {
+    const output = formatCollectWarnings([
+      {
+        source: "codex",
+        code: "parse_error",
+        path: "C:\\Users\\asa\\.codex\\sessions\\private-session.jsonl",
+        message:
+          "Failed to parse C:\\Users\\asa\\.codex\\sessions\\private-session.jsonl",
+      },
+      {
+        source: "claude",
+        path: "/home/asa/.claude/projects/private-project/log.jsonl",
+        message:
+          "sourceSessionId session-should-not-print sourceMessageId message-should-not-print",
+      },
+      {
+        source: "opencode",
+        code: "partial_file",
+        path: "/Users/asa/.local/share/opencode/private.json",
+        message: "Skipped malformed usage entry",
+        record: { rawProjectPath: "/Users/asa/private-project" },
+      },
+      {
+        source: "codex",
+        code: "parse_error",
+        path: "C:\\Users\\asa\\.codex\\sessions\\private-session-2.jsonl",
+        message: "Skipped malformed usage entry",
+      },
+    ]);
+
+    expect(output).toBe(
+      [
+        "Warnings: 4",
+        "- claude: 1",
+        "- codex: 1 parse_error",
+        "- codex: 1 parse_error Skipped malformed usage entry",
+        "- opencode: 1 partial_file Skipped malformed usage entry",
+      ].join("\n"),
+    );
+    expect(output).not.toMatch(
+      /C:\\Users|\/home\/asa|\/Users\/asa|private-session|private-project|session-should-not-print|message-should-not-print|rawProjectPath/,
+    );
+  });
+
+  it("formats upload responses without run ids or raw error payloads", () => {
+    const output = formatSyncUploadResult(
+      [
+        {
+          runId: "run-id-should-not-print",
+          status: "accepted",
+          inserted: 2,
+          updated: 1,
+          skipped: 0,
+          errors: [{ sourceMessageId: "message-should-not-print" }],
+          rollupStatus: "completed",
+        },
+      ],
+      "http://localhost:3000/app",
+    );
+
+    expect(output).toBe(
+      [
+        "Upload: accepted",
+        "Inserted: 2",
+        "Updated: 1",
+        "Skipped: 0",
+        "Errors: 1",
+        "Rollup: completed",
+        "Dashboard: http://localhost:3000/app",
+      ].join("\n"),
+    );
+    expect(output).not.toMatch(/run-id|message-should-not-print/);
+  });
+
+  it("derives a credential-free dashboard URL from HTTP API URLs", () => {
+    expect(
+      dashboardUrlFromApiUrl(
+        "http://user:secret@localhost:4000/v1/sync?token=private#details",
+      ),
+    ).toBe("http://localhost:3000/app");
+    expect(dashboardUrlFromApiUrl("http://127.0.0.1:4300/v1/sync")).toBe(
+      "http://127.0.0.1:3300/app",
+    );
+    expect(
+      dashboardUrlFromApiUrl(
+        "https://api.toksync.example:8443/v1/sync?token=private#details",
+      ),
+    ).toBe("https://api.toksync.example:8443/app");
+    expect(
+      dashboardUrlFromApiUrl("ftp://localhost:4000/usage"),
+    ).toBeUndefined();
+    expect(dashboardUrlFromApiUrl("not a URL")).toBeUndefined();
+  });
+
+  it("skips interactive sync confirmation only for explicit or headless modes", () => {
+    expect(shouldSkipSyncConfirmation({ yes: true, tokenMode: false })).toBe(
+      true,
+    );
+    expect(shouldSkipSyncConfirmation({ yes: false, tokenMode: true })).toBe(
+      true,
+    );
+    expect(shouldSkipSyncConfirmation({ yes: false, tokenMode: false })).toBe(
+      false,
+    );
+  });
+
+  it("requires --yes or a user API token for non-interactive uploads", async () => {
+    await expect(
+      ensureUploadAllowed({
+        token: "tsd_device_token",
+        stdin: { isTTY: false } as NodeJS.ReadStream,
+      }),
+    ).rejects.toThrow(/--yes/);
+
+    await expect(
+      ensureUploadAllowed({
+        token: "tsk_user_token",
+        stdin: { isTTY: false } as NodeJS.ReadStream,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      ensureUploadAllowed({
+        token: "unknown_token",
+        stdin: { isTTY: false } as NodeJS.ReadStream,
+      }),
+    ).rejects.toThrow(/--yes/);
+
+    await expect(
+      ensureUploadAllowed({
+        token: "tsd_device_token",
+        yes: true,
+        stdin: { isTTY: false } as NodeJS.ReadStream,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("prompts interactive device-token uploads and honors cancellation", async () => {
+    await expect(
+      ensureUploadAllowed({
+        token: "tsd_device_token",
+        stdin: { isTTY: true } as NodeJS.ReadStream,
+        ask: async () => "no",
+      }),
+    ).rejects.toThrow(/cancelled/);
+
+    await expect(
+      ensureUploadAllowed({
+        token: "tsd_device_token",
+        stdin: { isTTY: true } as NodeJS.ReadStream,
+        ask: async () => "yes",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("sanitizes the interactive upload confirmation API URL", async () => {
+    const questions: string[] = [];
+    await expect(
+      ensureUploadAllowed({
+        token: "unknown_token",
+        apiUrl:
+          "https://user:secret@api.example.test:8443/v1/sync?token=private#details",
+        stdin: { isTTY: true } as NodeJS.ReadStream,
+        ask: async (question) => {
+          questions.push(question);
+          return "yes";
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(questions).toEqual([
+      'Upload metrics-only usage to https://api.example.test:8443? Type "yes" to continue: ',
+    ]);
+    expect(questions.join("\n")).not.toMatch(
+      /user|secret|token=private|details|\/v1\/sync/,
+    );
   });
 
   it("builds local usage reports by model and period without private identifiers", () => {

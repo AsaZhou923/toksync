@@ -2,6 +2,137 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-09-05-review-and-reliability-hardening"></a>
+
+## 2026-09-05 - Review and reliability hardening
+
+Date: 2026-09-05
+
+This review validates the existing console simplification and closes reliability, dependency-security, and documentation gaps before publishing the accumulated project changes. The preceding September 4 entry preserves the earlier simplification history.
+
+### User-visible fixes
+
+- Device authorization, public-profile saves, device actions, cost-rule saves, and leaderboard controls surface network failures and allow retry. Pending actions disable repeat submission.
+- Share keeps advanced navigation folded on its default page; explicit advanced-tab URLs remain directly accessible.
+- Current dashboard and public aggregate last-sync timestamps exclude cleared device history. Sync-run history remains available for inspection.
+
+### Dependencies and verification infrastructure
+
+- Update existing Next, Hono, Node adapter, Drizzle, Vitest, and coverage dependencies to patched versions without adding direct dependencies.
+- Apply scoped pnpm overrides for Next's PostCSS/sharp, PostCSS's nanoid, and tsx's esbuild where upstream constraints retain affected versions.
+- Production dependency audit initially reported 33 advisories. The subsequent full audit also identified development-tool advisories; both dependency trees now audit clean.
+- CI runs dependency audit and hosted-session browser tests, and collects failure artifacts from the isolated Playwright run directories.
+- Fix coverage collection scanning generated Playwright/Next files, which caused Windows lcov report generation to fail. Preserve Vitest's default exclusions and exclude generated run directories.
+- Document the existing inline-script CSP compatibility constraint for Next static hydration; public SVG responses continue to disallow scripts.
+
+### Documentation and scope
+
+- Update both READMEs, the agent guide, current external specs/guides, the simplification plan, and a new review report while preserving historical sections.
+- Refresh the README dashboard screenshot from the verified synthetic browser fixture so it shows the current five-entry navigation.
+- Execute the unified changelog workflow and synchronize both changelog files to the external Update Logs archive.
+- FileStore remains the local default. Postgres, worker queues, content sync, teams, billing, production deployment, migration, and data backfills remain outside this change.
+
+### Affected files
+
+- Web components, Share hub, hosted-session/regular browser tests, and repository/API regression tests.
+- Repository current-aggregate selection, workspace package manifests, `pnpm-lock.yaml`, and `.github/workflows/ci.yml`.
+- `vitest.config.ts`, `README.md`, `README.zh-CN.md`, `AGENTS.md`, `docs/assets/`, and `docs/changelog/`.
+
+### Verification
+
+- Baseline `corepack pnpm test:full`: passed, with 211 unit tests, 9 regular E2E tests, 1 hosted-session E2E test, and 5 visual tests.
+- Network-failure regressions reproduce the original failure before the corresponding fixes and exercise successful retry afterward.
+- Final `corepack pnpm test:full`: passed (214 unit tests in 29 files, 9 regular E2E, 1 hosted-session E2E, 5 visual tests; formatting, boundaries, typecheck, lint, and Next build passed).
+- `corepack pnpm test:coverage`, `corepack pnpm audit`, `corepack pnpm audit --prod`, and `corepack pnpm install --frozen-lockfile`: passed. Coverage excludes generated artifacts; both audit scopes report zero known vulnerabilities.
+- Performance smoke: 4,097 parsed events in 89 ms; 10,000 ingested events in 197 ms; dashboard 6 ms; SVG 1 ms.
+- Device-delete regressions cover remaining-device timestamp fallback, repeated deletion and same-client replay within one millisecond, preserved original run start time, and browser return to the waiting-for-sync state.
+
+<a id="2026-09-04-simplified-console-and-cli-confirmation"></a>
+
+## 2026-09-04 - Simplified console and CLI confirmation
+
+Date: 2026-09-04
+
+This update records the S1-S7 simplification work now present in the working tree. The user-facing app path is Dashboard, Sync, Sources, Share, and Settings; old app routes remain compatible through redirects or advanced links while public SVG URLs and metrics-only API contracts stay stable.
+
+### User-visible changes
+
+- Authenticated navigation is reduced to five primary entries: Dashboard, Sync, Sources, Share, and Settings.
+- Dashboard focuses on usage totals, estimated cost, last sync, issues, and a daily trend instead of loading full vault, proof, receipt, health, merge, and guardrail panels on the first screen.
+- Sync now groups connection status, devices, runs, issues, and receipt details under one task center.
+- Sources now groups detected collectors and source health, with undetected and parser/parity details kept secondary.
+- Share now centers the public profile switch and recommended README profile card, with badge variants, Proof Pack, Wrapped, and leaderboard controls under advanced sharing.
+- Settings now separates Account, Privacy, Data, device data deletion, and Developer token controls.
+- Clearing submitted public data now resets every public detail flag, including project/workspace labels, so a later profile re-enable cannot revive hidden sharing preferences.
+
+### Compatibility
+
+- Sixteen legacy authenticated routes redirect with query preservation: `/app/activity`, `/app/models`, `/app/projects`, `/app/budgets`, `/app/guardrails`, `/app/devices`, `/app/sync-runs`, `/app/merge`, `/app/receipts`, `/app/health`, `/app/embed`, `/app/proof-pack`, `/app/wrapped`, `/app/leaderboard`, `/app/exports`, and `/app/vault`.
+- `/app/devices`, `/app/sync-runs`, `/app/merge`, and `/app/receipts` redirect into `/app/sync` tabs.
+- `/app/health` redirects into `/app/sources?tab=health`.
+- `/app/embed`, `/app/proof-pack`, `/app/wrapped`, and `/app/leaderboard` redirect into Share advanced tabs.
+- `/app/exports` and `/app/vault` redirect into Settings data tabs.
+- `/app/budgets` and `/app/guardrails` redirect to Dashboard costs.
+
+### Agent and development loop
+
+- `toksync login` now prints one next step: `toksync sync`.
+- `toksync status` prints connection, last sync, source, and issue summary text instead of dumping raw sync-state JSON.
+- `toksync sync --dry-run` continues to preview metrics without uploading.
+- Device-token uploads ask for confirmation in interactive shells. Non-interactive device-token uploads require `--yes`; user API tokens remain the explicit headless path.
+- Root `pnpm dev` now starts Web and API only. Run `pnpm dev:worker` to start the optional worker health surface.
+
+### Deferred work
+
+- S6 API cleanup audit is complete for the 48 current route surfaces: public/auth/sync/core/advanced current routes are Keep, `POST /v1/sync/content-batch` is Keep-disabled, `POST /v1/local/preview` is Deprecate because external use is unknown, and Remove is none.
+- S6 repository cleanup audit covered 45 public `TokSyncRepository` methods. `reset` and `authenticateUserApiToken` are dead-code candidates, and `ensureUser` is a privatize candidate, but no method was removed because external-use uncertainty remains.
+- S7 Postgres/runtime and worker queue boundaries are upheld: FileStore remains the current default, root `pnpm dev` starts Web and API only, and Postgres/worker queue decisions remain parked until there is a hosted persistence requirement, parity tests, migration verification, backup/rollback plan, and real async work.
+- No production deploy, push, migration, backfill, billing, content sync, search/eval, team/RBAC, or source expansion is part of this change.
+
+### Documentation
+
+- Updated `README.md` and `README.zh-CN.md` to separate day-to-day use from developer smoke tests, document `--yes`, and mark the worker as explicit.
+- External Current Guide and Local Development now record the five task centers, compatibility redirects, and explicit worker script. A follow-up in the external docs checkout still needs to add the final-user three-step/confirmation wording, the hosted-auth verification command, and the `dashboard/overview.status` response shape; Testing, Specs, the simplification plan, roadmap, and docs change list remain governed there.
+
+### Verification note
+
+- Playwright E2E and visual verification should use `pnpm test:e2e` and `pnpm test:visual`, which allocate run-specific ports, JSON store, agent config, Next output, and output directories. Direct concurrent `playwright test` is unsupported unless the caller provides isolated `TOKSYNC_PLAYWRIGHT_*` paths and ports.
+
+<a id="2026-09-03-simplification-review-and-doc-reset"></a>
+
+## 2026-09-03 - Simplification review and documentation reset
+
+Date: 2026-09-03
+
+This documentation-only update resets TokSync's active product direction around one core flow: connect a device, sync metrics, view the dashboard, resolve issues, and optionally share a README card.
+
+### Documentation
+
+- Reworked the project index, overview, PRD, sitemap, current guide, and roadmap so current implementation, target experience, future work, and historical plans are separated.
+- Added a repository-backed simplification review covering product scope, UX, architecture, API, data, and developer experience.
+- Added a staged simplification plan with route migration, compatibility, verification, and rollback criteria.
+- Marked the former Tokscale, v0.6-v0.7, feasibility, and long architecture documents as historical.
+- Marked Content/Team and Billing plans as parked.
+
+### Product direction
+
+- Target authenticated navigation is Dashboard, Sync, Sources, Share, and Settings.
+- Advanced governance and sharing features remain available but move out of the default user path.
+- New sources, leaderboard expansion, Postgres/worker productionization, content sync, search/eval, teams, and billing are paused until the core simplification is verified.
+
+### Compatibility and privacy
+
+- No runtime code, API route, schema, stored data, or public SVG URL changed.
+- Metrics-only, idempotency, device deletion, public opt-in, and private/public data boundaries remain unchanged.
+- The first implementation phase will preserve existing routes with redirects before any deletion is considered.
+
+### Verification
+
+- Both repositories were clean and aligned with origin/main before edits.
+- Current code surface was counted and inspected: 48 API routes, 32 Web pages, 19 authenticated pages, and a 3,243-line repository implementation.
+- The current Dashboard was inspected in a real browser using isolated synthetic dev data.
+- Markdown front matter, internal links, current/future terminology, and Git diffs are verified as part of this update.
+
 <a id="2026-07-05-playwright-windows-csp-hardening"></a>
 
 ## 2026-07-05 - Playwright Windows CSP hardening

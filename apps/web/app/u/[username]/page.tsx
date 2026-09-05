@@ -126,7 +126,7 @@ export default async function PublicProfilePage({
               <a className="btn" href="/app/settings">
                 Owner settings
               </a>
-              <a className="btn" href="/app/embed">
+              <a className="btn" href="/app/share?tab=embed">
                 README embeds
               </a>
             </div>

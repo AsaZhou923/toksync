@@ -2,6 +2,8 @@
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { stdin as input, stdout as output } from "node:process";
+import * as readline from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import {
@@ -22,12 +24,32 @@ import {
   deviceFingerprint,
   loadConfig,
   saveConfig,
+  type AgentConfig,
 } from "./config";
 
 const AGENT_VERSION = "0.1.0";
 const AGENT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const UPLOAD_SIZE_CHECK_RUN_ID =
   "00000000-0000-4000-8000-000000000000-00000-of-00000";
+
+type CollectOptions = Parameters<typeof collectUsageEvents>[0];
+
+interface CollectCommandOptions {
+  fixture?: string;
+  source?: CollectOptions["sources"];
+}
+
+interface SyncUploadResponse {
+  status?: string;
+  inserted?: unknown;
+  updated?: unknown;
+  skipped?: unknown;
+  errors?: unknown[];
+  rollupStatus?: string;
+  [key: string]: unknown;
+}
+
+type SyncUploadNumericField = "inserted" | "updated" | "skipped";
 
 const program = new Command();
 program
@@ -61,6 +83,7 @@ program
         config.deviceId || `headless-${deviceFingerprint(config).slice(0, 24)}`;
       saveConfig(config);
       console.log("Configured TokSync user API token for headless sync");
+      console.log(loginNextStep());
       return;
     }
 
@@ -93,9 +116,8 @@ program
         config.deviceToken = result.deviceToken;
         config.username = result.username;
         saveConfig(config);
-        console.log(
-          `Connected device ${config.deviceName} as ${config.username ?? "user"}`,
-        );
+        console.log(`Connected to TokSync as ${config.username ?? "user"}`);
+        console.log(loginNextStep());
         return;
       }
       await sleep((result.interval ?? started.interval ?? 2) * 1000);
@@ -116,21 +138,19 @@ program
   .description("Show local TokSync agent status")
   .action(async () => {
     const config = loadConfig();
-    console.log(`Config: ${config.apiUrl}`);
-    console.log(
-      `Device: ${config.deviceId ? `${config.deviceName ?? "device"} (${config.deviceId})` : "not connected"}`,
-    );
-    if (config.deviceToken) {
-      if (config.deviceToken.startsWith("tsd_")) {
-        const state = await getJson(
-          `${config.apiUrl}/v1/sync/state`,
-          config.deviceToken,
-        ).catch((error) => ({ error: String(error) }));
-        console.log(JSON.stringify(state, null, 2));
-      } else {
-        console.log("Auth: user API token configured");
-      }
+    let syncState: SyncStateView | undefined;
+    let syncStateError: string | undefined;
+    if (config.deviceToken?.startsWith("tsd_")) {
+      const state = await getJson(
+        `${config.apiUrl}/v1/sync/state`,
+        config.deviceToken,
+      ).catch((error) => {
+        syncStateError = error instanceof Error ? error.message : String(error);
+        return undefined;
+      });
+      syncState = state as SyncStateView | undefined;
     }
+    console.log(formatStatus(config, syncState, syncStateError));
   });
 
 const sources = program
@@ -162,22 +182,13 @@ program
     const kind = parseReportKind(view);
     const format = parseReportFormat(options.format);
     const config = loadConfig();
-    const collectOptions = {
-      deviceId: config.deviceId || "report-device",
-      sources: options.source,
-    } as Parameters<typeof collectUsageEvents>[0];
-    if (options.fixture) {
-      collectOptions.fixture = path.resolve(
-        process.env.INIT_CWD || process.cwd(),
-        options.fixture,
-      );
-    }
-
-    const result = await collectUsageEvents(collectOptions);
+    const result = await collectUsageEvents(
+      buildCollectOptions(options, config.deviceId || "report-device"),
+    );
     const report = buildUsageReport(result.events, kind);
     console.log(formatUsageReport(report, format));
     if (result.errors.length > 0) {
-      console.error(`Warnings: ${JSON.stringify(result.errors, null, 2)}`);
+      console.error(formatCollectWarnings(result.errors));
     }
   });
 
@@ -187,6 +198,7 @@ program
   .option("--dry-run", "Preview without uploading")
   .option("--fixture <path>", "Read synthetic fixture directory or file")
   .option("--source <source...>", "Restrict to one or more sources")
+  .option("--yes", "Upload without interactive confirmation")
   .action(async (options) => {
     const config = loadConfig();
     if (!config.deviceId) {
@@ -195,17 +207,9 @@ program
         : `headless-${deviceFingerprint(config).slice(0, 24)}`;
     }
 
-    const collectOptions = {
-      deviceId: config.deviceId,
-      sources: options.source,
-    } as Parameters<typeof collectUsageEvents>[0];
-    if (options.fixture) {
-      collectOptions.fixture = path.resolve(
-        process.env.INIT_CWD || process.cwd(),
-        options.fixture,
-      );
-    }
-    const result = await collectUsageEvents(collectOptions);
+    const result = await collectUsageEvents(
+      buildCollectOptions(options, config.deviceId),
+    );
     const summary = summarizeEvents(result.events);
     const batchBase = {
       schemaVersion: 1,
@@ -225,20 +229,10 @@ program
       runId: "dry-run",
       mode: options.dryRun ? "dry-run" : "sync",
     });
-    console.log(`Events: ${summary.eventCount}`);
-    console.log(`Tokens: ${summary.tokens}`);
-    console.log(`Cost: ${formatUsd(summary.costUsd)}`);
-    console.log(
-      `Date range: ${summary.dateStart ?? "n/a"} to ${summary.dateEnd ?? "n/a"}`,
-    );
-    console.log(`Sources: ${JSON.stringify(summary.sources)}`);
-    console.log(`Receipt digest: ${receipt.payloadDigest}`);
-    console.log(
-      `Receipt excluded fields: ${receipt.excludedFields.join(", ")}`,
-    );
+    console.log(formatSyncSummary(summary, receipt));
 
     if (result.errors.length > 0) {
-      console.log(`Warnings: ${JSON.stringify(result.errors, null, 2)}`);
+      console.log(formatCollectWarnings(result.errors));
     }
 
     if (options.dryRun) return;
@@ -246,6 +240,11 @@ program
     if (!writeToken || !config.deviceId) {
       throw new Error("Run toksync login before sync, or use --dry-run");
     }
+    await ensureUploadAllowed({
+      token: writeToken,
+      yes: Boolean(options.yes),
+      apiUrl: config.apiUrl,
+    });
 
     const responses = [];
     const chunks = chunkForUpload(
@@ -276,14 +275,13 @@ program
       responses.push(response);
       if (chunks.length > 1) {
         console.log(`Batch ${index + 1}/${chunks.length}`);
-        console.log(JSON.stringify(response, null, 2));
+        console.log(formatSyncUploadResult([response]));
       }
     }
     console.log(
-      JSON.stringify(
-        chunks.length === 1 ? responses[0] : summarizeSyncResponses(responses),
-        null,
-        2,
+      formatSyncUploadResult(
+        responses,
+        dashboardUrlFromApiUrl(process.env.APP_URL || config.apiUrl),
       ),
     );
   });
@@ -308,6 +306,288 @@ async function postJson(url: string, body: unknown, token?: string) {
   if (!response.ok)
     throw new Error(`${response.status} ${JSON.stringify(payload)}`);
   return payload;
+}
+
+function loginNextStep() {
+  return "Next: toksync sync";
+}
+
+function buildCollectOptions(
+  options: CollectCommandOptions,
+  deviceId: string,
+): CollectOptions {
+  const collectOptions: CollectOptions = {
+    deviceId,
+    ...(options.source === undefined ? {} : { sources: options.source }),
+  };
+  if (options.fixture) {
+    collectOptions.fixture = path.resolve(
+      process.env.INIT_CWD || process.cwd(),
+      options.fixture,
+    );
+  }
+  return collectOptions;
+}
+
+interface SyncStateView {
+  deviceId?: string;
+  lastAcceptedRunAt?: string | null;
+  knownSources?: Record<string, { eventCount?: number; lastEventAt?: number }>;
+  [key: string]: unknown;
+}
+
+export function formatStatus(
+  config: AgentConfig,
+  syncState?: SyncStateView,
+  syncStateError?: string,
+) {
+  const lines = [`API: ${config.apiUrl}`];
+  const hasToken = Boolean(config.deviceToken);
+  if (!hasToken) {
+    lines.push("Connection: not connected");
+    lines.push("Next: toksync login");
+    return lines.join("\n");
+  }
+
+  if (config.deviceToken?.startsWith("tsd_")) {
+    lines.push(
+      `Connection: connected${config.username ? ` as ${config.username}` : ""}`,
+    );
+    lines.push(`Device: ${config.deviceName ?? "device"}`);
+    if (syncStateError) {
+      lines.push("Sync state: unavailable");
+    } else {
+      lines.push(`Last sync: ${syncState?.lastAcceptedRunAt ?? "never"}`);
+      lines.push(`Sources: ${formatKnownSources(syncState?.knownSources)}`);
+      lines.push("Issues: none reported by sync state");
+    }
+    return lines.join("\n");
+  }
+
+  lines.push("Connection: user API token configured");
+  lines.push(`Device: ${config.deviceName ?? "headless device"}`);
+  lines.push("Last sync: unavailable for user API token mode");
+  lines.push("Issues: unavailable for user API token mode");
+  return lines.join("\n");
+}
+
+function formatKnownSources(
+  knownSources?: Record<string, { eventCount?: number; lastEventAt?: number }>,
+) {
+  if (!knownSources || Object.keys(knownSources).length === 0)
+    return "none yet";
+  return Object.entries(knownSources)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([source, state]) => {
+      const lastEventAt =
+        typeof state.lastEventAt === "number"
+          ? new Date(state.lastEventAt).toISOString()
+          : "unknown";
+      return `${source} ${state.eventCount ?? 0} events, last event ${lastEventAt}`;
+    })
+    .join("; ");
+}
+
+export function formatSyncSummary(
+  summary: ReturnType<typeof summarizeEvents>,
+  receipt: ReturnType<typeof buildLocalReceipt>,
+) {
+  return [
+    `Events: ${summary.eventCount}`,
+    `Tokens: ${summary.tokens}`,
+    `Cost estimate: ${formatUsd(summary.costUsd)}`,
+    `Date range: ${summary.dateStart ?? "n/a"} to ${summary.dateEnd ?? "n/a"}`,
+    `Sources: ${formatSourceCounts(summary.sources)}`,
+    `Receipt digest: ${receipt.payloadDigest}`,
+    `Receipt excludes: ${receipt.excludedFields.join(", ")}`,
+  ].join("\n");
+}
+
+function formatSourceCounts(sources: Record<string, number>) {
+  const entries = Object.entries(sources).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (entries.length === 0) return "none";
+  return entries.map(([source, count]) => `${source} ${count}`).join(", ");
+}
+
+export function formatCollectWarnings(errors: unknown[]) {
+  const groups = new Map<
+    string,
+    { source: string; code?: string; message?: string; count: number }
+  >();
+  for (const error of errors) {
+    const value = objectValue(error) as Record<string, unknown>;
+    const source =
+      typeof value.source === "string" && isSafeShortLabel(value.source)
+        ? value.source
+        : "unknown";
+    const code =
+      typeof value.code === "string" && isSafeShortLabel(value.code)
+        ? value.code
+        : undefined;
+    const message =
+      typeof value.message === "string" && isSafeWarningMessage(value.message)
+        ? value.message
+        : undefined;
+    const key = `${source}\0${code ?? ""}\0${message ?? ""}`;
+    let current = groups.get(key);
+    if (!current) {
+      current = { source, count: 0 };
+      if (code) current.code = code;
+      if (message) current.message = message;
+    }
+    current.count += 1;
+    groups.set(key, current);
+  }
+
+  return [
+    `Warnings: ${errors.length}`,
+    ...[...groups.values()]
+      .sort(
+        (left, right) =>
+          left.source.localeCompare(right.source) ||
+          (left.code ?? "").localeCompare(right.code ?? "") ||
+          (left.message ?? "").localeCompare(right.message ?? ""),
+      )
+      .map((group) => {
+        const code = group.code ? ` ${group.code}` : "";
+        const message = group.message ? ` ${group.message}` : "";
+        return `- ${group.source}: ${group.count}${code}${message}`;
+      }),
+  ].join("\n");
+}
+
+function isSafeShortLabel(value: string) {
+  return /^[a-z0-9_.-]{1,64}$/i.test(value);
+}
+
+function isSafeWarningMessage(value: string) {
+  if (value.length > 160) return false;
+  if (/[A-Za-z]:[\\/]/.test(value)) return false;
+  if (/(^|\s)(\/[^\s/]+){2,}/.test(value)) return false;
+  if (/(^|\s)~[\\/]/.test(value)) return false;
+  if (/[{}[\]]/.test(value)) return false;
+  if (
+    /\b(sourceSessionId|sourceMessageId|workspaceKeyHash|dedupKey|rawRecord|record|deviceToken|apiToken)\b/i.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function shouldSkipSyncConfirmation(options: {
+  yes: boolean;
+  tokenMode: boolean;
+}) {
+  return options.yes || options.tokenMode;
+}
+
+export async function ensureUploadAllowed(options: {
+  token: string;
+  yes?: boolean;
+  apiUrl?: string;
+  stdin?: NodeJS.ReadStream;
+  ask?: (question: string) => Promise<string>;
+}) {
+  if (
+    shouldSkipSyncConfirmation({
+      yes: Boolean(options.yes),
+      tokenMode: isHeadlessToken(options.token),
+    })
+  ) {
+    return;
+  }
+
+  const promptInput = options.stdin ?? input;
+  if (!promptInput.isTTY) {
+    throw new Error(
+      "Non-interactive sync with a device token requires --yes or a user API token.",
+    );
+  }
+
+  const answer = await (options.ask ?? askUploadConfirmation)(
+    `Upload metrics-only usage${formatUploadTarget(options.apiUrl)}? Type "yes" to continue: `,
+  );
+  if (!["yes", "sync"].includes(answer.trim().toLowerCase())) {
+    throw new Error("Sync cancelled; no data uploaded");
+  }
+}
+
+function formatUploadTarget(apiUrl?: string) {
+  const origin = safeHttpOrigin(apiUrl);
+  return origin ? ` to ${origin}` : "";
+}
+
+function safeHttpOrigin(apiUrl?: string) {
+  return parseHttpUrl(apiUrl)?.origin;
+}
+
+export function dashboardUrlFromApiUrl(apiUrl: string) {
+  const parsed = parseHttpUrl(apiUrl);
+  if (!parsed) return undefined;
+
+  if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+    if (parsed.port === "4000") parsed.port = "3000";
+    if (parsed.port === "4300") parsed.port = "3300";
+  }
+
+  return `${parsed.protocol}//${parsed.host}/app`;
+}
+
+function parseHttpUrl(value?: string) {
+  if (!value) return undefined;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function formatDashboardUrl(config: AgentConfig) {
+  const dashboardUrl = dashboardUrlFromApiUrl(config.apiUrl);
+  return dashboardUrl ? `Dashboard: ${dashboardUrl}` : undefined;
+}
+
+export function formatSyncUploadResult(
+  responses: SyncUploadResponse[],
+  dashboardUrl?: string,
+) {
+  const summary =
+    responses.length === 1 ? responses[0]! : summarizeSyncResponses(responses);
+  const lines = [
+    `Upload: ${summary.status ?? "unknown"}`,
+    `Inserted: ${numberField(summary, "inserted")}`,
+    `Updated: ${numberField(summary, "updated")}`,
+    `Skipped: ${numberField(summary, "skipped")}`,
+    `Errors: ${Array.isArray(summary.errors) ? summary.errors.length : 0}`,
+    `Rollup: ${summary.rollupStatus ?? "unknown"}`,
+  ];
+  if (dashboardUrl) lines.push(`Dashboard: ${dashboardUrl}`);
+  return lines.join("\n");
+}
+
+function numberField(value: SyncUploadResponse, field: SyncUploadNumericField) {
+  const fieldValue = value[field];
+  return typeof fieldValue === "number" ? fieldValue : 0;
+}
+
+async function askUploadConfirmation(question: string) {
+  const rl = readline.createInterface({ input, output });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
+function isHeadlessToken(token: string) {
+  return token.startsWith("tsk_");
 }
 
 async function getJson(url: string, token: string) {
@@ -385,7 +665,7 @@ function formatBytes(bytes: number) {
   return `${bytes}B`;
 }
 
-export function summarizeSyncResponses(responses: any[]) {
+export function summarizeSyncResponses(responses: SyncUploadResponse[]) {
   return {
     status: responses.every((response) => response.status === "accepted")
       ? "accepted"
@@ -408,10 +688,12 @@ export function summarizeSyncResponses(responses: any[]) {
   };
 }
 
-function sumResponseField(responses: any[], field: string) {
+function sumResponseField(
+  responses: SyncUploadResponse[],
+  field: SyncUploadNumericField,
+) {
   return responses.reduce(
-    (sum, response) =>
-      sum + (typeof response[field] === "number" ? response[field] : 0),
+    (sum, response) => sum + numberField(response, field),
     0,
   );
 }
