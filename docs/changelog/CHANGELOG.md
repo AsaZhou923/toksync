@@ -2,6 +2,17 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-10-13-dependency-security"></a>
+
+## 2026-10-13 - Dependency security and Vitest 4 migration
+
+Date: 2026-10-13
+
+- Update Next.js from 15.5.25 to 15.5.27 and its scoped sharp override from 0.35.4 to 0.35.5; refresh source-map-js to 1.2.2 in the lockfile. Keep the existing PostCSS, nanoid, and esbuild overrides.
+- Align Vitest and its V8 coverage provider at 4.1.11. The Vitest 3 line has no fix for [GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9); the v4 dependency graph also removes the vulnerable tinypool and brace-expansion packages.
+- Explicitly include application, package, and script sources in coverage so uncovered runtime files remain visible after Vitest 4 removes the `coverage.all` default. Coverage percentages may change with the upgraded V8 remapper; test and generated-file exclusions remain in place.
+- Preserve Node 22, pnpm 9.15.9, all CI validation steps, and the dependency audit gate. There are no application behavior, API, data, or permission changes.
+
 <a id="2026-09-05-review-and-reliability-hardening"></a>
 
 ## 2026-09-05 - Review and reliability hardening
