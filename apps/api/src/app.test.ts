@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -202,6 +202,78 @@ function cookieHeader(setCookie: string | null, name: string) {
 }
 
 describe("TokSync API", () => {
+  it.each([
+    ["device", "insert"],
+    ["device", "update"],
+    ["device", "replay"],
+    ["headless", "insert"],
+    ["headless", "update"],
+    ["headless", "replay"],
+  ])(
+    "rejects %s dry-run %s without changing private or public state",
+    async (authKind, operation) => {
+      const { api, repo, store } = trackingContext();
+      const auth = await connectDevice(api);
+      const deviceId =
+        authKind === "headless" ? "headless-synthetic-preview" : auth.deviceId;
+      const token =
+        authKind === "headless"
+          ? repo.createUserApiToken("demo", {
+              name: "Synthetic preview",
+              scopes: ["usage:write"],
+            }).token
+          : auth.deviceToken;
+      const event = usageEvent(deviceId);
+      const original = usageBatch(deviceId, [event], "persisted-run");
+      if (operation !== "insert")
+        expect((await postBatch(api, token, original)).status).toBe(200);
+      repo.setPublicProfile("demo", {
+        enabled: true,
+        showCost: true,
+        showSourceBreakdown: true,
+        showModelBreakdown: true,
+        showWorkspaceBreakdown: false,
+      });
+      const preview = {
+        ...original,
+        runId: operation === "replay" ? original.runId : "preview-run",
+        mode: "dry-run",
+        events:
+          operation === "update"
+            ? [{ ...event, tokens: { ...event.tokens, input: 900 } }]
+            : [event],
+      };
+      const before = {
+        disk: readFileSync(store.filePath, "utf8"),
+        memory: JSON.stringify(store.read()),
+        summary: repo.dashboardSummary("demo"),
+        public: await (await api.request("/v1/public-profile/demo")).json(),
+        transactions: store.transactions,
+      };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await postBatch(api, token, preview);
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: { code: "invalid_payload" },
+        });
+        expect(readFileSync(store.filePath, "utf8")).toBe(before.disk);
+        expect(JSON.stringify(store.read())).toBe(before.memory);
+        expect(repo.dashboardSummary("demo")).toEqual(before.summary);
+        expect(
+          await (await api.request("/v1/public-profile/demo")).json(),
+        ).toEqual(before.public);
+        expect(store.transactions).toBe(before.transactions);
+      }
+      const sync = await postBatch(api, token, { ...preview, mode: "sync" });
+      expect(sync.status).toBe(200);
+      expect(await sync.json()).toMatchObject({
+        inserted: operation === "insert" ? 1 : 0,
+        updated: operation === "update" ? 1 : 0,
+        skipped: operation === "replay" ? 1 : 0,
+      });
+    },
+  );
+
   it("allows credentialed localhost browser clients without wildcard CORS", async () => {
     const { api } = testContext();
 

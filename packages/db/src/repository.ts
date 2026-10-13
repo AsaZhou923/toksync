@@ -603,6 +603,18 @@ export class TokSyncRepository {
     }
 
     const batch = envelope.data;
+    // Dry-run batches belong to local previews. Reject before authentication,
+    // which can create a headless device or update token usage timestamps.
+    if (batch.mode !== "sync") {
+      return {
+        ok: false as const,
+        response: apiError(
+          "invalid_payload",
+          "Usage batch uploads require mode=sync; use the CLI for dry-run previews",
+        ),
+        status: 400,
+      };
+    }
     return this.store.transaction<IngestUsageBatchResult>((data) => {
       const usageAuth = this.authenticateUsageWriter(data, rawToken, batch);
       if (!usageAuth) {
