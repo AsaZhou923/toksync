@@ -1250,7 +1250,14 @@ describe("TokSync API", () => {
     });
   });
 
-  it("blocks leaderboard opt-in until public profile is enabled and only lists opted-in public users", async () => {
+  it("blocks leaderboard opt-in until public profile is enabled and only lists opted-in public users", async ({
+    onTestFinished,
+  }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-02-03T12:00:00.000Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { api } = testContext();
     const alice = await connectDevice(api, "alice", "leaderboard-alice");
     const bob = await connectDevice(api, "bob", "leaderboard-bob");
@@ -1430,6 +1437,153 @@ describe("TokSync API", () => {
     expect(
       (await json<any>(await api.request("/v1/leaderboard"))).rows,
     ).toEqual([]);
+  });
+
+  it("uses a shared current date for every leaderboard window and metric", async ({
+    onTestFinished,
+  }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-03T23:59:59.000Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { api, repo, store } = trackingContext();
+    const fixtures: Record<string, Array<[string, number]>> = {
+      current: [
+        ["2026-02-24", 1000],
+        ["2026-02-25", 100],
+        ["2026-02-28", 40],
+        ["2026-03-01", 20],
+        ["2026-03-02", 10],
+        ["2026-03-03", 5],
+      ],
+      stale: [["2020-01-02", 50000]],
+      previous: [["2026-02-28", 8]],
+      inactive: [["2026-03-01", 4]],
+      future: [["2026-03-04", 100000]],
+    };
+    for (const [username, days] of Object.entries(fixtures)) {
+      const auth = await connectDevice(api, username, `synthetic-${username}`);
+      expect(
+        (
+          await postBatch(
+            api,
+            auth.deviceToken,
+            usageBatch(
+              auth.deviceId,
+              days.map(([localDate, tokens]) =>
+                usageEvent(auth.deviceId, {
+                  dedupKey: `synthetic-${username}-${localDate}`,
+                  sourceMessageId: `synthetic-${localDate}`,
+                  localDate,
+                  timestampMs: Date.parse(`${localDate}T12:00:00.000Z`),
+                  tokens: {
+                    input: tokens,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    reasoning: 0,
+                  },
+                  costUsd: tokens / 100,
+                }),
+              ),
+            ),
+          )
+        ).status,
+      ).toBe(200);
+      repo.setPublicProfile(username, {
+        enabled: true,
+        showCost: true,
+        showModelBreakdown: false,
+        showSourceBreakdown: false,
+        showWorkspaceBreakdown: false,
+      });
+      repo.setLeaderboardOptIn(username, { enabled: true });
+    }
+    const transactions = store.transactions;
+    for (const [period, expected] of [
+      ["weekly", { tokens: 175, cost: 1.75, active_days: 5, streak: 4 }],
+      ["monthly", { tokens: 35, cost: 0.35, active_days: 3, streak: 3 }],
+    ] as const) {
+      for (const [metric, value] of Object.entries(expected)) {
+        const board = await json<any>(
+          await api.request(
+            `/v1/leaderboard?metric=${metric}&period=${period}&currentUser=stale`,
+          ),
+        );
+        expect(board.generatedAt).toBe("2026-03-03T23:59:59.000Z");
+        expect(board.rows[0]).toMatchObject({
+          username: "current",
+          metricValue: value,
+          monthlyTokens: 35,
+          activeDays: expected.active_days,
+          streak: expected.streak,
+        });
+        expect(board.rows.map((row: any) => row.username)).not.toContain(
+          "stale",
+        );
+        expect(board.rows.map((row: any) => row.username)).not.toContain(
+          "future",
+        );
+        expect(board.currentUserRank).toBeNull();
+        if (period === "monthly" || metric === "streak")
+          expect(board.rows.map((row: any) => row.username)).not.toContain(
+            "previous",
+          );
+        if (metric === "streak") expect(board.rows).toHaveLength(1);
+      }
+    }
+    for (const period of ["all_time", "weekly", "monthly"]) {
+      const board = await json<any>(
+        await api.request(
+          `/v1/leaderboard?metric=monthly_tokens&period=${period}`,
+        ),
+      );
+      expect(
+        board.rows.map((row: any) => [row.username, row.metricValue]),
+      ).toEqual([
+        ["current", 35],
+        ["inactive", 4],
+      ]);
+    }
+    for (const [metric, value] of [
+      ["tokens", 50000],
+      ["cost", 500],
+      ["active_days", 1],
+    ] as const) {
+      const board = await json<any>(
+        await api.request(
+          `/v1/leaderboard?metric=${metric}&period=all_time&search=stale`,
+        ),
+      );
+      expect(board.rows).toEqual([
+        expect.objectContaining({
+          username: "stale",
+          metricValue: value,
+          monthlyTokens: 0,
+          streak: 0,
+        }),
+      ]);
+    }
+    const allTime = await json<any>(await api.request("/v1/leaderboard"));
+    expect(allTime.rows.map((row: any) => row.username)).not.toContain(
+      "future",
+    );
+    expect(
+      allTime.rows.find((row: any) => row.username === "current"),
+    ).toMatchObject({
+      metricValue: 1175,
+      monthlyTokens: 35,
+      streak: 4,
+    });
+    vi.setSystemTime(new Date("2026-04-01T00:00:00.000Z"));
+    for (const period of ["weekly", "monthly"]) {
+      expect(
+        (await json<any>(await api.request(`/v1/leaderboard?period=${period}`)))
+          .rows,
+      ).toEqual([]);
+    }
+    expect(store.transactions).toBe(transactions);
   });
 
   it("creates and revokes user API tokens for headless metrics sync", async () => {
