@@ -242,7 +242,7 @@ async function fixtureLocations(fixtureRoot: string, sources: string[]) {
     return [
       {
         source: inferred,
-        path: path.dirname(fixtureRoot),
+        path: fixtureRoot,
         exists: sources.includes(inferred),
         fileCount: 1,
       },
