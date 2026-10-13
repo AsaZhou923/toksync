@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const USAGE_BATCH_MAX_EVENTS = 10_000;
+const deviceIdSchema = z.string().min(1);
 
 export const tokenBreakdownSchema = z.object({
   input: z.number().int().nonnegative(),
@@ -16,7 +17,7 @@ export const usageEventV1Schema = z.object({
   sourceSessionId: z.string().min(1).max(512),
   sourceMessageId: z.string().min(1).max(512).optional(),
   dedupKey: z.string().min(1).max(1024),
-  deviceId: z.string().min(1),
+  deviceId: deviceIdSchema,
   workspaceKeyHash: z.string().min(1).optional(),
   workspaceLabel: z.string().min(1).max(160).optional(),
   agent: z.string().min(1).max(160).optional(),
@@ -34,7 +35,7 @@ export const usageBatchV1Schema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().min(1).max(128),
   device: z.object({
-    id: z.string().min(1),
+    id: deviceIdSchema,
     name: z.string().min(1).max(160),
     platform: z.enum(["windows", "macos", "linux"]),
     agentVersion: z.string().min(1).max(40),
@@ -67,7 +68,7 @@ export const costGuardrailInputSchema = z
     scope: costGuardrailScopeSchema,
     source: z.string().min(1).max(64).optional(),
     modelId: z.string().min(1).max(160).optional(),
-    deviceId: z.string().uuid().optional(),
+    deviceId: deviceIdSchema.optional(),
     period: costGuardrailPeriodSchema,
     limitUsd: z.number().positive(),
     enabled: z.boolean().default(true),
