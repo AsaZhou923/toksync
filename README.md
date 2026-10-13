@@ -128,6 +128,11 @@ the current agent process after it is read. Device login stores `deviceToken` as
 Non-interactive device-token uploads must pass `--yes`; user API token uploads
 are the explicit headless path.
 
+Headless sync saves its random device seed and derived device ID in the local
+config before the first upload, so retries and later runs reuse one device.
+The environment token is not saved. Keep `TOKSYNC_CONFIG_DIR` persistent across
+runs; reports, dry-runs, and missing-auth failures do not create this config.
+
 Local reports can be generated without opening the Web dashboard:
 
 ```bash

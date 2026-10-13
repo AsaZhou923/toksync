@@ -201,6 +201,7 @@ program
   .option("--yes", "Upload without interactive confirmation")
   .action(async (options) => {
     const config = loadConfig();
+    const needsIdentitySave = !config.deviceId;
     if (!config.deviceId) {
       config.deviceId = options.dryRun
         ? "dry-run-device"
@@ -245,6 +246,9 @@ program
       yes: Boolean(options.yes),
       apiUrl: config.apiUrl,
     });
+    // Persist identity before uploading so retries and later processes use the
+    // same device. The one-shot environment token never enters this config.
+    if (needsIdentitySave) saveConfig(config);
 
     const responses = [];
     const chunks = chunkForUpload(
