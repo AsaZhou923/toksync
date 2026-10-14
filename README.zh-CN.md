@@ -80,6 +80,8 @@ pnpm agent sync --yes
 
 `TOKSYNC_API_TOKEN` 只作为当前进程一次性输入，读取后会从 agent 进程环境中清除。设备登录写入本地配置时，`deviceToken` 会保存为 `deviceTokenEncrypted`，使用 AES-256-GCM 和本机 `config.key`；旧的明文配置仍可读取，并会在下次保存时迁移。device token 在非交互环境上传时必须显式传入 `--yes`；user API token 是明确的 headless 路径。
 
+Headless sync 会在首次上传前保存本地随机 device seed 和派生设备 ID，使重试及后续运行复用同一设备，但不会保存环境变量 token。请在多次运行之间保留同一个 `TOKSYNC_CONFIG_DIR`；report、dry-run 和缺少认证的失败不会创建这份配置。
+
 无需打开 Web dashboard 也可以查看本地报表：
 
 ```bash
