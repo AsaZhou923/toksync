@@ -37,6 +37,10 @@ across machines while keeping private content out of the sync payload.
 The product direction follows Tokscale's strong usage/profile/README embed loop,
 but TokSync's default path is private multi-device aggregation. Public profile,
 README badge/card, and leaderboard remain explicit opt-in layers.
+Leaderboard periods share the response's UTC generation date: weekly covers
+the trailing seven dates, monthly covers month-to-date, and all-time retains
+historical totals through that date. Streaks end on that date; `monthlyTokens`
+always uses the current month-to-date window.
 
 Current simplification work narrows the authenticated app to five primary
 surfaces: Dashboard, Sync, Sources, Share, and Settings. Old authenticated app

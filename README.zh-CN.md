@@ -108,6 +108,7 @@ Worker 地址只在运行 `pnpm dev:worker` 后可用。根目录 `pnpm dev` 只
 - cost 是估算，不是 provider billing truth。
 - Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。
 - leaderboard 需要先开启 public profile，再单独 opt-in，并且只读取 public aggregate cache；排行榜范围只做全局榜。
+- leaderboard 统一以响应生成时的 UTC 日期为基准：周榜统计最近七个日期，月榜统计当月截至当天，all-time 保留截至当天的历史累计。连续活跃天数以当天为终点，`monthlyTokens` 始终使用当前月窗口。
 - Private Usage Vault 使用至少 16 字符的用户 recovery passphrase 加密 metrics-only artifact，新导出记录显式 scrypt 参数，支持下载、preview 和跨实例 import；不导出正文或工具 payload。
 - 多实例 hosted 部署前可配置 `TOKSYNC_RATE_LIMIT_REDIS_URL=redis://...` 或 `rediss://...`，让 API rate limit 共享 Redis 计数；未配置时仍使用本地内存限流。
 - content sync、search 和 eval export 仍是后续 opt-in 能力。
