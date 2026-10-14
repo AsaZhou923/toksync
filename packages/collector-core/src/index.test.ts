@@ -7,6 +7,63 @@ import { collectUsageEvents, discoverSources, summarizeEvents } from "./index";
 const root = path.resolve("packages/test-fixtures");
 
 describe("collector-core fixtures", () => {
+  it("keeps a single-file fixture scoped to that file", async () => {
+    const fixture = writeFixture("codex", [
+      {
+        sourceSessionId: "synthetic-session",
+        sourceMessageId: "only",
+        modelId: "gpt-5.4",
+        timestampMs: 1770000000000,
+        tokens: { input: 1, output: 2 },
+      },
+    ]);
+    const input = path.join(fixture, "input");
+    const target = path.join(input, "events.jsonl");
+    const sibling = {
+      sourceSessionId: "synthetic-session",
+      sourceMessageId: "sibling",
+      timestampMs: 1770000000000,
+      tokens: { input: 100, output: 200 },
+    };
+    writeFileSync(path.join(input, "sibling.jsonl"), JSON.stringify(sibling));
+    mkdirSync(path.join(input, "nested"));
+    writeFileSync(
+      path.join(input, "nested", "other.jsonl"),
+      JSON.stringify({ ...sibling, sourceMessageId: "nested" }),
+    );
+
+    const result = await collectUsageEvents({
+      deviceId: "device-1",
+      fixture: target,
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.events.map((event) => event.sourceMessageId)).toEqual([
+      "only",
+    ]);
+    expect(summarizeEvents(result.events)).toMatchObject({
+      eventCount: 1,
+      tokens: 3,
+    });
+    expect(result.locations).toEqual([
+      { source: "codex", path: target, exists: true, fileCount: 1 },
+    ]);
+
+    const directory = await collectUsageEvents({
+      deviceId: "device-1",
+      fixture,
+    });
+    expect(directory.events).toHaveLength(3);
+    expect(
+      (
+        await collectUsageEvents({
+          deviceId: "device-1",
+          fixture: target,
+          sources: ["claude"],
+        })
+      ).events,
+    ).toEqual([]);
+  });
+
   it.each(["codex/basic", "claude/basic", "opencode/basic"])(
     "normalizes %s",
     async (fixture) => {
