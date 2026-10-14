@@ -106,7 +106,7 @@ Worker 地址只在运行 `pnpm dev:worker` 后可用。根目录 `pnpm dev` 只
 - Receipt、Merge、Health、Export、Guardrails、Vault 使用低敏字段类别和聚合摘要，不返回 prompt、assistant reply、tool args、tool output、file content、raw path、source session id、source message id 或 workspace hash。
 - 设备指纹不得由 hostname、硬件标识、用户名、home path 或项目路径推导。
 - cost 是估算，不是 provider billing truth。
-- Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。
+- Cost Guardrails 只属于私有 dashboard，不进入 public profile、README SVG 或 leaderboard。设备规则同时支持普通 UUID 和 headless 设备 ID，目标设备必须属于当前用户。
 - leaderboard 需要先开启 public profile，再单独 opt-in，并且只读取 public aggregate cache；排行榜范围只做全局榜。
 - leaderboard 统一以响应生成时的 UTC 日期为基准：周榜统计最近七个日期，月榜统计当月截至当天，all-time 保留截至当天的历史累计。连续活跃天数以当天为终点，`monthlyTokens` 始终使用当前月窗口。
 - Private Usage Vault 使用至少 16 字符的用户 recovery passphrase 加密 metrics-only artifact，新导出记录显式 scrypt 参数，支持下载、preview 和跨实例 import；不导出正文或工具 payload。

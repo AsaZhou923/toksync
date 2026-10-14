@@ -1252,6 +1252,87 @@ describe("TokSync API", () => {
     expect(serializedPublic).not.toContain("workspaceKeyHash");
   });
 
+  it.each(["uuid", "headless"])(
+    "supports owned %s device guardrails and rejects other targets",
+    async (kind) => {
+      const { api, repo, store } = trackingContext();
+      const alice = await connectDevice(api, "alice", "guardrail-alice");
+      const bob = await connectDevice(api, "bob", "guardrail-bob");
+      let ownId = alice.deviceId;
+      let foreignId = bob.deviceId;
+      if (kind === "headless") {
+        ownId = "headless-synthetic-alice";
+        foreignId = "headless-synthetic-bob";
+        for (const [username, deviceId] of [
+          ["alice", ownId],
+          ["bob", foreignId],
+        ]) {
+          const token = repo.createUserApiToken(username!, {
+            name: "Synthetic headless",
+            scopes: ["usage:write"],
+          });
+          expect(
+            (
+              await postBatch(
+                api,
+                token.token,
+                usageBatch(
+                  deviceId!,
+                  [usageEvent(deviceId!)],
+                  `${username}-sync`,
+                ),
+              )
+            ).status,
+          ).toBe(200);
+        }
+      }
+      const devices = await json<any>(
+        await api.request("/v1/devices", {
+          headers: { "X-TokSync-User": "alice" },
+        }),
+      );
+      expect(devices.devices.map((device: any) => device.id)).toContain(ownId);
+      const save = (deviceId: string, id?: string) =>
+        api.request("/v1/cost-guardrails", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-TokSync-User": "alice",
+          },
+          body: JSON.stringify({
+            scope: "device",
+            deviceId,
+            id,
+            period: "monthly",
+            limitUsd: 10,
+          }),
+        });
+      const created = await save(ownId);
+      expect(created.status).toBe(200);
+      const { rule } = await json<any>(created);
+      expect(rule).toMatchObject({
+        deviceId: ownId,
+        scope: "device",
+        period: "monthly",
+        limitUsd: 10,
+      });
+      const rules = JSON.stringify(store.read().costGuardrailRules);
+      for (const deviceId of ["headless-does-not-exist", foreignId]) {
+        for (const id of [undefined, rule.id]) {
+          const rejected = await save(deviceId, id);
+          expect(rejected.status).toBe(404);
+          expect(await rejected.json()).toMatchObject({
+            error: { code: "not_found" },
+          });
+          expect(JSON.stringify(store.read().costGuardrailRules)).toBe(rules);
+        }
+      }
+      const updated = await save(ownId, rule.id);
+      expect(updated.status).toBe(200);
+      expect((await json<any>(updated)).rule.id).toBe(rule.id);
+    },
+  );
+
   it("requires private auth for cost guardrails and rejects invalid payloads", async () => {
     const { api } = lockedContext();
 

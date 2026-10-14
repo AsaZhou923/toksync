@@ -199,7 +199,8 @@ multi-instance hosted deployment to share counters across instances.
   username, home path, or project path.
 - Cost is approximate usage estimation, not provider billing truth.
 - Cost Guardrails are private-only and never feed public profile, README SVG, or
-  leaderboard output.
+  leaderboard output. Device rules accept both UUID and headless device IDs;
+  the target device must belong to the current user.
 - Leaderboard participation requires public profile plus a second explicit
   opt-in, reads public aggregate cache only, and is global-only.
 - Private Usage Vault encrypts metrics-only artifacts with a user recovery

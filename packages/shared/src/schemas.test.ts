@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  costGuardrailInputSchema,
   totalTokens,
   vaultEncryptedPayloadSchema,
   vaultExportInputSchema,
@@ -10,6 +11,34 @@ import {
 } from "./index";
 
 describe("UsageEventV1 schema", () => {
+  it.each([
+    "headless-synthetic-device",
+    "11111111-1111-4111-8111-111111111111",
+  ])("accepts supported device id %s in guardrails", (deviceId) => {
+    expect(
+      costGuardrailInputSchema.parse({
+        scope: "device",
+        deviceId,
+        period: "monthly",
+        limitUsd: 10,
+      }).deviceId,
+    ).toBe(deviceId);
+  });
+
+  it.each([undefined, "", 42])(
+    "rejects missing or invalid guardrail device id %s",
+    (deviceId) => {
+      expect(
+        costGuardrailInputSchema.safeParse({
+          scope: "device",
+          deviceId,
+          period: "monthly",
+          limitUsd: 10,
+        }).success,
+      ).toBe(false);
+    },
+  );
+
   it("accepts metrics-only usage events", () => {
     const event = usageEventV1Schema.parse({
       schemaVersion: 1,
