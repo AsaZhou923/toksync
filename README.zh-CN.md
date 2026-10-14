@@ -66,6 +66,8 @@ corepack pnpm agent sync --fixture ./packages/test-fixtures/codex/basic --yes
 
 重复同步同一批事件时，TokSync 应该把重复事件计入 `skipped`，而不是重复累计 totals。
 
+`POST /v1/sync/usage-batch` 仅接受 `mode: "sync"`。`mode: "dry-run"` 请求会在任何状态修改之前返回 HTTP 400（`invalid_payload`）。本地预览请使用 `toksync sync --dry-run`，不会上传数据。
+
 Hosted 或 private headless sync 需要配置真实 API endpoint，并使用 user API token：
 
 ```bash

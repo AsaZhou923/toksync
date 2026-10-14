@@ -110,6 +110,10 @@ corepack pnpm agent sync --fixture ./packages/test-fixtures/codex/basic --yes
 The first sync inserts usage events. Repeating the same sync should skip the
 same events instead of double-counting totals.
 
+`POST /v1/sync/usage-batch` accepts only `mode: "sync"`. Requests with
+`mode: "dry-run"` return HTTP 400 (`invalid_payload`) before any state changes.
+Use `toksync sync --dry-run` for local previews without uploading.
+
 Hosted or private headless sync uses a real API endpoint plus a user API token
 created from settings or the API:
 
