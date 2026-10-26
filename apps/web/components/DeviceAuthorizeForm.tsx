@@ -91,7 +91,7 @@ export function DeviceAuthorizeForm() {
           disabled={pending}
           value={userCode}
           onChange={(event) => setUserCode(event.target.value)}
-          placeholder="TS-1234"
+          placeholder="TS-ABCD-EFGH"
         />
       </label>
       {DEV_AUTH_ENABLED ? (

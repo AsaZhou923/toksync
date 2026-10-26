@@ -12,6 +12,7 @@ import {
   sessionCookie,
   userFromRequest,
 } from "../auth-helpers";
+import { deviceAuthorizationLimiter } from "../rate-limit";
 
 export function registerAuthRoutes(
   app: Hono,
@@ -23,6 +24,7 @@ export function registerAuthRoutes(
   },
 ) {
   const { devAuth, sessionSecret, githubOAuth } = options;
+  const limitAuthorization = deviceAuthorizationLimiter();
 
   app.get("/v1/auth/github/start", (c) => {
     if (!githubOAuth)
@@ -125,6 +127,8 @@ export function registerAuthRoutes(
         : userFromRequest(c.req.raw, devAuth, sessionSecret);
     if (!username)
       return c.json(apiError("invalid_auth", "User session required"), 401);
+    const rejected = await limitAuthorization(c, username, userCode);
+    if (rejected) return rejected;
     const result = repo.authorizeDeviceCode(userCode, username);
     if (!result)
       return c.json(
