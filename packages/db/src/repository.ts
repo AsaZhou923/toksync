@@ -66,6 +66,8 @@ export { FileVaultArtifactStore, type VaultArtifactStore } from "./vault";
 
 const DEFAULT_DEVICE_CODE_TTL_SECONDS = 15 * 60;
 const DEVICE_CODE_POLL_INTERVAL_SECONDS = 2;
+const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const USER_CODE_MAX_ATTEMPTS = 10;
 const COST_SPIKE_BASELINE_DAYS = 7;
 const COST_SPIKE_MULTIPLIER = 2;
 const COST_SPIKE_MIN_DELTA_USD = 1;
@@ -297,7 +299,24 @@ export class TokSyncRepository {
     return this.store.transaction((data) => {
       pruneDeviceCodesInData(data);
       const deviceCode = `dev_${randomBytes(24).toString("base64url")}`;
-      const userCode = `TS-${randomBytes(2).toString("hex").toUpperCase()}`;
+      let userCode: string | undefined;
+      for (let attempt = 0; attempt < USER_CODE_MAX_ATTEMPTS; attempt += 1) {
+        // Eight uniform base-32 characters provide 40 bits of entropy.
+        const characters = [...randomBytes(8)]
+          .map((byte) => USER_CODE_ALPHABET[byte & 31])
+          .join("");
+        const candidate = `TS-${characters.slice(0, 4)}-${characters.slice(4)}`;
+        if (
+          !data.deviceCodes.some(
+            (code) => code.userCode.toUpperCase() === candidate,
+          )
+        ) {
+          userCode = candidate;
+          break;
+        }
+      }
+      if (!userCode)
+        throw new Error("Unable to generate a unique device user code");
       const now = new Date();
       const ttlSeconds = deviceCodeTtlSeconds();
       const fingerprint =
@@ -336,7 +355,8 @@ export class TokSyncRepository {
       if (Date.parse(code.expiresAt) < Date.now()) {
         return { commit: pruned, result: null };
       }
-      if (code.consumedAt) return { commit: pruned, result: null };
+      if (code.consumedAt || code.authorizedUserId)
+        return { commit: pruned, result: null };
       const user = this.ensureUserInData(data, username, {
         displayName: username === "demo" ? "Demo Developer" : username,
       });
@@ -1961,6 +1981,7 @@ export class TokSyncRepository {
       let device = data.devices.find(
         (item) => item.id === batch.device.id && item.userId === user.id,
       );
+      if (device?.revokedAt) return null;
       const now = new Date().toISOString();
       if (!device) {
         device = {

@@ -202,6 +202,85 @@ function cookieHeader(setCookie: string | null, name: string) {
 }
 
 describe("TokSync API", () => {
+  it("limits authorization guesses per account despite rotating headers and codes", async () => {
+    const { api } = testContext();
+    for (let index = 0; index < 11; index += 1) {
+      const response = await api.request("/v1/auth/device/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": `198.51.100.${index}`,
+          "CF-Connecting-IP": `192.0.2.${index}`,
+        },
+        body: JSON.stringify({
+          username: index % 2 ? "Alice" : "alice",
+          userCode: `TS-WRONG-${index}`,
+        }),
+      });
+      expect(response.status).toBe(index < 10 ? 404 : 429);
+      if (index === 10) {
+        expect(response.headers.get("Retry-After")).toBeTruthy();
+        expect(await response.json()).toMatchObject({
+          error: { code: "rate_limited" },
+        });
+      }
+    }
+    // An independent account retains its account budget.
+    expect(
+      (
+        await api.request("/v1/auth/device/authorize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: "bob", userCode: "TS-OTHER" }),
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("limits guesses of the same code across different accounts", async () => {
+    const { api } = testContext();
+    for (let index = 0; index < 6; index += 1) {
+      const response = await api.request("/v1/auth/device/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: `user-${index}`,
+          userCode: index % 2 ? "ts-missing" : "TS-MISSING",
+        }),
+      });
+      expect(response.status).toBe(index < 5 ? 404 : 429);
+    }
+  });
+
+  it("rejects API-token uploads from a revoked device without changing persisted state", async () => {
+    const { api, repo, store } = trackingContext();
+    const token = repo.createUserApiToken("alice", {
+      name: "CI",
+      scopes: ["usage:write"],
+    })!.token;
+    const deviceId = "headless-revoke-test";
+    const batch = usageBatch(deviceId, [usageEvent(deviceId)]);
+    expect((await postBatch(api, token, batch)).status).toBe(200);
+    expect(
+      (
+        await api.request(`/v1/devices/${deviceId}/revoke`, {
+          method: "POST",
+          headers: { "X-TokSync-User": "alice" },
+        })
+      ).status,
+    ).toBe(200);
+    const before = JSON.stringify(store.read());
+    const rejected = await postBatch(api, token, {
+      ...batch,
+      runId: "after-revoke",
+    });
+    expect(rejected.status).toBe(401);
+    expect(await rejected.json()).toMatchObject({
+      error: { code: "invalid_auth" },
+    });
+    expect(JSON.stringify(store.read())).toBe(before);
+  });
+
   it.each([
     ["device", "insert"],
     ["device", "update"],

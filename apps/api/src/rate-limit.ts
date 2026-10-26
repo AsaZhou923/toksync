@@ -1,7 +1,9 @@
 import net from "node:net";
 import tls from "node:tls";
+import { createHash } from "node:crypto";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
-import { apiError } from "@toksync/shared";
+import { apiError, normalizeUsername } from "@toksync/shared";
 
 const RATE_LIMIT_PRUNE_INTERVAL_MS = 60_000;
 const RATE_LIMIT_MAX_BUCKETS = 10_000;
@@ -226,6 +228,12 @@ class RedisConnection {
 }
 
 export function rateLimit(store: RateLimitStore = resolveRateLimitStore()) {
+  const trustedProxies = new Set(
+    (process.env.TOKSYNC_TRUSTED_PROXY || "")
+      .split(",")
+      .map((value) => normalizedIp(value.trim()))
+      .filter((value): value is string => Boolean(value)),
+  );
   return async (c: Context, next: Next) => {
     const requestUrl = new URL(c.req.url);
     const policy = rateLimitPolicy(requestUrl.pathname);
@@ -234,30 +242,67 @@ export function rateLimit(store: RateLimitStore = resolveRateLimitStore()) {
       return;
     }
 
-    const now = Date.now();
-    const key = `${clientKey(c.req.raw)}:${policy.name}`;
-    let bucket: RateLimitBucket;
-    try {
-      bucket = await store.increment(key, policy, now);
-    } catch (error) {
-      if (process.env.NODE_ENV !== "test") {
-        console.error(error);
-      }
-      return c.json(
-        apiError("rate_limited", "Rate limiter is unavailable"),
-        503,
-      );
-    }
-    if (bucket.count > policy.limit) {
-      c.header("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
-      return c.json(
-        apiError("rate_limited", "Too many requests; retry after the window"),
-        429,
-      );
-    }
-
+    const key = `${clientKey(c, trustedProxies)}:${policy.name}`;
+    const rejected = await checkLimit(c, store, key, policy);
+    if (rejected) return rejected;
     await next();
   };
+}
+
+// Account and code budgets survive IP rotation. Hash identities so Redis keys
+// do not disclose usernames or short-lived authorization codes.
+export function deviceAuthorizationLimiter(
+  store: RateLimitStore = resolveRateLimitStore(),
+) {
+  return async (c: Context, username: string, userCode: string) => {
+    for (const [identity, policy] of [
+      [
+        normalizeUsername(username),
+        { name: "auth-user", limit: 10, windowMs: 60_000 },
+      ],
+      [
+        userCode.trim().toUpperCase(),
+        { name: "auth-code", limit: 5, windowMs: 15 * 60_000 },
+      ],
+    ] as const) {
+      const digest = createHash("sha256").update(identity).digest("hex");
+      const rejected = await checkLimit(
+        c,
+        store,
+        `${policy.name}:${digest}`,
+        policy,
+      );
+      if (rejected) return rejected;
+    }
+    return null;
+  };
+}
+
+async function checkLimit(
+  c: Context,
+  store: RateLimitStore,
+  key: string,
+  policy: RateLimitPolicy,
+) {
+  const now = Date.now();
+  let bucket: RateLimitBucket;
+  try {
+    bucket = await store.increment(key, policy, now);
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error(error);
+    }
+    return c.json(apiError("rate_limited", "Rate limiter is unavailable"), 503);
+  }
+  if (bucket.count > policy.limit) {
+    c.header("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+    return c.json(
+      apiError("rate_limited", "Too many requests; retry after the window"),
+      429,
+    );
+  }
+
+  return null;
 }
 
 function resolveRateLimitStore(): RateLimitStore {
@@ -280,12 +325,36 @@ function rateLimitPolicy(pathname: string): RateLimitPolicy | null {
   return null;
 }
 
-function clientKey(request: Request) {
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "local"
-  );
+function clientKey(c: Context, trustedProxies: Set<string>) {
+  // In-process app.request() has no Node socket; never substitute a header.
+  let peer: string | undefined;
+  try {
+    peer = normalizedIp(getConnInfo(c).remote.address || "");
+  } catch {
+    return "local";
+  }
+  if (!peer) return "local";
+  const forwarded = c.req.header("x-forwarded-for");
+  if (!trustedProxies.has(peer) || !forwarded) return peer;
+  // Walk from the socket towards the client, stopping at the first untrusted
+  // hop. An attacker-supplied prefix remains untrusted when a proxy appends XFF.
+  for (const hop of forwarded.split(",").reverse()) {
+    if (!trustedProxies.has(peer)) break;
+    const address = normalizedIp(hop.trim());
+    if (!address) return peer;
+    peer = address;
+  }
+  return peer;
+}
+
+function normalizedIp(value: string) {
+  if (!net.isIP(value)) return undefined;
+  const normalized = value.includes(":")
+    ? new URL(`http://[${value}]/`).hostname.slice(1, -1)
+    : value;
+  return normalized.startsWith("::ffff:") && net.isIP(value.slice(7)) === 4
+    ? value.slice(7)
+    : normalized;
 }
 
 function encodeRespArray(args: string[]) {

@@ -192,6 +192,22 @@ API rate limiting uses an in-process store for local development. Set
 `TOKSYNC_RATE_LIMIT_REDIS_URL=redis://...` or `rediss://...` before
 multi-instance hosted deployment to share counters across instances.
 
+Device authorization codes use eight random base-32 characters (`TS-ABCD-EFGH`,
+40 bits), with collision checks and a single account binding. Authorization
+attempts are also limited per account (10/minute) and per code (5/15 minutes),
+independently of IP. Rate limiting uses the Node socket peer by default; client
+`X-Forwarded-For` and `CF-Connecting-IP` headers cannot select a bucket.
+For reverse proxies, set `TOKSYNC_TRUSTED_PROXY` to a comma-separated list of
+exact proxy IP addresses (for example `127.0.0.1,::1`). Only X-Forwarded-For from
+those peers is read, walking right to left to the first untrusted hop. Configure
+the proxy to append or overwrite X-Forwarded-For; CIDR ranges and header-only
+runtime adapters are not supported by this setting.
+
+`TOKSYNC_DEV_AUTH` is local-only: production startup fails if development auth
+is enabled, including through `createApiApp({ devAuth: true })`. Revoking a
+device blocks uploads through both device tokens and user API tokens. A fresh
+browser-authorized device login is required to re-enable that device.
+
 ## Privacy Contract
 
 - Public profile is disabled by default.

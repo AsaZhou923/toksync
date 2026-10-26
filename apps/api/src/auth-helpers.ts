@@ -42,10 +42,14 @@ export function resolveSessionSecret(explicit: string | undefined) {
 }
 
 export function resolveDevAuth(explicit: boolean | undefined) {
-  if (explicit !== undefined) return explicit;
-  if (process.env.TOKSYNC_DEV_AUTH)
-    return /^(1|true|yes)$/i.test(process.env.TOKSYNC_DEV_AUTH);
-  return false;
+  const enabled =
+    explicit ?? /^(1|true|yes)$/i.test(process.env.TOKSYNC_DEV_AUTH || "");
+  if (enabled && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "TOKSYNC_DEV_AUTH must be disabled before starting TokSync in production",
+    );
+  }
+  return enabled;
 }
 
 export function userFromRequest(
