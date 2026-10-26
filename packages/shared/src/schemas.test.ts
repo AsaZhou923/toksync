@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   costGuardrailInputSchema,
+  localPreviewInputSchema,
   totalTokens,
   vaultEncryptedPayloadSchema,
   vaultExportInputSchema,
@@ -11,6 +12,16 @@ import {
 } from "./index";
 
 describe("UsageEventV1 schema", () => {
+  it("preserves optional arbitrary local preview payloads", () => {
+    expect(localPreviewInputSchema.parse({})).toEqual({});
+    expect(localPreviewInputSchema.parse({ payload: undefined })).toEqual({
+      payload: undefined,
+    });
+    expect(localPreviewInputSchema.parse({ payload: { events: [] } })).toEqual({
+      payload: { events: [] },
+    });
+  });
+
   it.each([
     "headless-synthetic-device",
     "11111111-1111-4111-8111-111111111111",

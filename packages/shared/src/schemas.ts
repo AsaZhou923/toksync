@@ -122,7 +122,7 @@ export const mergeIssueResolutionInputSchema = z.object({
 });
 
 export const localPreviewInputSchema = z.object({
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
 });
 
 export const vaultFormatSchema = z.literal("toksync-vault-v1");

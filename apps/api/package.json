@@ -20,12 +20,12 @@
     "@toksync/embed-renderer": "workspace:*",
     "@toksync/pricing": "workspace:*",
     "@toksync/shared": "workspace:*",
-    "hono": "^4.12.34"
+    "hono": "^4.13.11"
   },
   "devDependencies": {
     "@types/node": "^22.15.18",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   }
 }

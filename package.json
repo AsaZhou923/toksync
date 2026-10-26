@@ -30,19 +30,20 @@
       "next>postcss": "8.5.23",
       "postcss>nanoid": "3.3.18",
       "next>sharp": "0.35.5",
-      "tsx>esbuild": "0.28.2"
+      "tsx>esbuild": "0.28.2",
+      "vite": "7.3.7"
     }
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
     "@types/node": "^22.15.18",
     "@types/pngjs": "^6.0.5",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "4.1.12",
     "pngjs": "^7.0.0",
     "prettier": "^3.5.3",
     "tsx": "^4.19.4",
     "turbo": "^2.5.3",
     "typescript": "^5.8.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   }
 }
