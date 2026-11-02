@@ -368,6 +368,104 @@ describe("collector-core fixtures", () => {
     expect(serialized).not.toContain("private-client");
   });
 
+  it("counts each Claude API message once across its content block lines", async () => {
+    const usage = {
+      input_tokens: 10,
+      output_tokens: 200,
+      cache_read_input_tokens: 5000,
+      cache_creation_input_tokens: 1000,
+    };
+    const assistantLine = (
+      uuid: string,
+      second: number,
+      requestId: string,
+      messageId: string,
+      blockType: string,
+    ) => ({
+      type: "assistant",
+      sessionId: "claude-blocks",
+      uuid,
+      requestId,
+      timestamp: `2026-02-04T10:00:0${second}.000Z`,
+      message: {
+        id: messageId,
+        model: "claude-sonnet-4-6",
+        role: "assistant",
+        content: [{ type: blockType }],
+        usage,
+      },
+    });
+    const userLine = (uuid: string, content: unknown) => ({
+      type: "user",
+      sessionId: "claude-blocks",
+      uuid,
+      timestamp: "2026-02-04T10:00:00.000Z",
+      message: { role: "user", content },
+    });
+    const fixture = writeFixture("claude", [
+      userLine("u1", "SECRET_PROMPT_SHOULD_NOT_UPLOAD"),
+      assistantLine("a1", 1, "req_1", "msg_1", "thinking"),
+      assistantLine("a2", 2, "req_1", "msg_1", "text"),
+      assistantLine("a3", 3, "req_1", "msg_1", "tool_use"),
+      userLine("u2", [{ type: "tool_result", content: "tool output" }]),
+      assistantLine("a4", 5, "req_2", "msg_2", "text"),
+      userLine("u3", [{ type: "text", text: "next prompt" }]),
+      assistantLine("a5", 7, "req_3", "msg_3", "text"),
+    ]);
+
+    const first = await collectUsageEvents({ deviceId: "device-1", fixture });
+    const replay = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(first.errors).toEqual([]);
+    expect(
+      first.events.map((event) => [
+        event.sourceMessageId,
+        event.timestampMs,
+        event.isTurnStart,
+      ]),
+    ).toEqual([
+      ["req_1", Date.parse("2026-02-04T10:00:01.000Z"), true],
+      ["req_2", Date.parse("2026-02-04T10:00:05.000Z"), false],
+      ["req_3", Date.parse("2026-02-04T10:00:07.000Z"), true],
+    ]);
+    expect(summarizeEvents(first.events).tokens).toBe(3 * 6210);
+    expect(replay.events.map((event) => event.dedupKey)).toEqual(
+      first.events.map((event) => event.dedupKey),
+    );
+    expect(JSON.stringify(first.events)).not.toMatch(
+      /SECRET_PROMPT|tool output|next prompt/,
+    );
+  });
+
+  it("keeps the most complete usage when Claude repeats a message", async () => {
+    const line = (uuid: string, second: number, outputTokens: number) => ({
+      type: "assistant",
+      sessionId: "claude-partial",
+      uuid,
+      requestId: "req_partial",
+      timestamp: `2026-02-04T10:00:0${second}.000Z`,
+      message: {
+        id: "msg_partial",
+        model: "claude-sonnet-4-6",
+        usage: { input_tokens: 10, output_tokens: outputTokens },
+      },
+    });
+    const fixture = writeFixture("claude", [
+      line("a1", 1, 5),
+      line("a2", 2, 120),
+      line("a3", 3, 120),
+    ]);
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      timestampMs: Date.parse("2026-02-04T10:00:02.000Z"),
+      tokens: { input: 10, output: 120 },
+      isTurnStart: true,
+    });
+  });
+
   it("reports malformed files and skips partial records with no usage", async () => {
     const malformed = writeFixture("codex", ["{not-json"]);
     const partial = writeFixture("codex", [
