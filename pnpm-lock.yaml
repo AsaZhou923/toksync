@@ -77,8 +77,8 @@ importers:
   apps/api:
     dependencies:
       '@hono/node-server':
-        specifier: ^1.19.15
-        version: 1.19.17(hono@4.13.14)
+        specifier: ^2.1.5
+        version: 2.1.5(hono@4.13.14)
       '@toksync/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -145,8 +145,8 @@ importers:
   apps/worker:
     dependencies:
       '@hono/node-server':
-        specifier: ^1.19.15
-        version: 1.19.17(hono@4.13.14)
+        specifier: ^2.1.5
+        version: 2.1.5(hono@4.13.14)
       '@toksync/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -449,11 +449,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hono/node-server@1.19.17':
-    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
-    engines: {node: '>=18.14.1'}
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
+    engines: {node: '>=20'}
     peerDependencies:
-      hono: ^4
+      hono: ^4 || ^5.0.0-0
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -1445,7 +1445,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@hono/node-server@1.19.17(hono@4.13.14)':
+  '@hono/node-server@2.1.5(hono@4.13.14)':
     dependencies:
       hono: 4.13.14
 
