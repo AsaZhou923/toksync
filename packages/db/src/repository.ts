@@ -71,6 +71,7 @@ const USER_CODE_MAX_ATTEMPTS = 10;
 const COST_SPIKE_BASELINE_DAYS = 7;
 const COST_SPIKE_MULTIPLIER = 2;
 const COST_SPIKE_MIN_DELTA_USD = 1;
+const MAX_FUTURE_EVENT_SKEW_MS = 24 * 60 * 60 * 1000;
 
 export interface RepositorySecrets {
   tokenHashSecret: string;
@@ -698,6 +699,14 @@ export class TokSyncRepository {
           continue;
         }
         const event = parsed.data;
+        if (event.timestampMs > Date.now() + MAX_FUTURE_EVENT_SKEW_MS) {
+          errors.push({
+            index,
+            code: "invalid_event",
+            message: "Event timestamp is too far in the future",
+          });
+          continue;
+        }
         if (event.deviceId !== device.id || batch.device.id !== device.id) {
           errors.push({
             index,
@@ -3402,8 +3411,17 @@ function stableUsageIndexKey(
     event.source,
     event.sourceSessionId,
     event.sourceMessageId ?? "",
-    event.timestampMs,
+    isMessageScopedUsageEvent(event) ? "" : event.timestampMs,
   ].join("\0");
+}
+
+// Claude Code writes one transcript line per content block of an API response.
+// Older agents uploaded each line with its own timestamp; matching Claude
+// events on the message id alone folds those repeats into a single event.
+function isMessageScopedUsageEvent(
+  event: Pick<UsageEventV1, "source" | "sourceMessageId">,
+) {
+  return event.source === "claude" && Boolean(event.sourceMessageId);
 }
 
 function constantTimeEqual(left: string, right: string) {

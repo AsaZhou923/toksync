@@ -1,35 +1,85 @@
 import { z } from "zod";
 
 export const USAGE_BATCH_MAX_EVENTS = 10_000;
+// Per-event sanity bounds. They sit far above any real single-message usage
+// and keep self-reported metrics from overflowing aggregates or public ranks.
+export const USAGE_EVENT_MAX_TOKENS = 1_000_000_000;
+export const USAGE_EVENT_MAX_COST_USD = 1_000_000;
+export const USAGE_EVENT_MAX_MESSAGES = 1_000_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const deviceIdSchema = z.string().min(1);
+const tokenCountSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(USAGE_EVENT_MAX_TOKENS);
 
 export const tokenBreakdownSchema = z.object({
-  input: z.number().int().nonnegative(),
-  output: z.number().int().nonnegative(),
-  cacheRead: z.number().int().nonnegative().default(0),
-  cacheWrite: z.number().int().nonnegative().default(0),
-  reasoning: z.number().int().nonnegative().default(0),
+  input: tokenCountSchema,
+  output: tokenCountSchema,
+  cacheRead: tokenCountSchema.default(0),
+  cacheWrite: tokenCountSchema.default(0),
+  reasoning: tokenCountSchema.default(0),
 });
 
-export const usageEventV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  source: z.string().min(1).max(64),
-  sourceSessionId: z.string().min(1).max(512),
-  sourceMessageId: z.string().min(1).max(512).optional(),
-  dedupKey: z.string().min(1).max(1024),
-  deviceId: deviceIdSchema,
-  workspaceKeyHash: z.string().min(1).optional(),
-  workspaceLabel: z.string().min(1).max(160).optional(),
-  agent: z.string().min(1).max(160).optional(),
-  modelId: z.string().min(1).max(160),
-  providerId: z.string().min(1).max(160).optional(),
-  timestampMs: z.number().int().nonnegative(),
-  localDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  tokens: tokenBreakdownSchema,
-  costUsd: z.number().nonnegative().optional(),
-  messageCount: z.number().int().positive().default(1),
-  isTurnStart: z.boolean().optional(),
-});
+export function isCalendarDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return (
+    Number.isFinite(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  );
+}
+
+// Local dates may differ from the UTC date of the timestamp by at most one
+// calendar day (UTC-12 through UTC+14).
+export function isLocalDateNearTimestamp(
+  localDate: string,
+  timestampMs: number,
+) {
+  const localDayMs = Date.parse(`${localDate}T00:00:00.000Z`);
+  const timestamp = new Date(timestampMs);
+  if (!Number.isFinite(localDayMs) || !Number.isFinite(timestamp.getTime())) {
+    return false;
+  }
+  const utcDayMs = Date.parse(
+    `${timestamp.toISOString().slice(0, 10)}T00:00:00.000Z`,
+  );
+  return Math.abs(localDayMs - utcDayMs) <= DAY_MS;
+}
+
+export const usageEventV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    source: z.string().min(1).max(64),
+    sourceSessionId: z.string().min(1).max(512),
+    sourceMessageId: z.string().min(1).max(512).optional(),
+    dedupKey: z.string().min(1).max(1024),
+    deviceId: deviceIdSchema,
+    workspaceKeyHash: z.string().min(1).optional(),
+    workspaceLabel: z.string().min(1).max(160).optional(),
+    agent: z.string().min(1).max(160).optional(),
+    modelId: z.string().min(1).max(160),
+    providerId: z.string().min(1).max(160).optional(),
+    timestampMs: z.number().int().nonnegative(),
+    localDate: z.string().refine(isCalendarDate, "Invalid calendar date"),
+    tokens: tokenBreakdownSchema,
+    costUsd: z.number().nonnegative().max(USAGE_EVENT_MAX_COST_USD).optional(),
+    messageCount: z
+      .number()
+      .int()
+      .positive()
+      .max(USAGE_EVENT_MAX_MESSAGES)
+      .default(1),
+    isTurnStart: z.boolean().optional(),
+  })
+  .refine(
+    (event) => isLocalDateNearTimestamp(event.localDate, event.timestampMs),
+    {
+      message: "localDate must be within one day of timestampMs",
+      path: ["localDate"],
+    },
+  );
 
 export const usageBatchV1Schema = z.object({
   schemaVersion: z.literal(1),

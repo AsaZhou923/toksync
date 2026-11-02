@@ -208,6 +208,20 @@ is enabled, including through `createApiApp({ devAuth: true })`. Revoking a
 device blocks uploads through both device tokens and user API tokens. A fresh
 browser-authorized device login is required to re-enable that device.
 
+Usage batches reject events with more than 1,000,000,000 tokens in any token
+field, more than $1,000,000 of cost, or more than 1,000,000 messages. They also
+reject impossible `localDate` values, a `localDate` more than one calendar day
+from the UTC date of `timestampMs`, and timestamps more than 24 hours in the
+future. Each rejected event is reported as `invalid_event`. Collectors derive
+`localDate` from the agent machine's timezone. Leaderboard windows still use
+the UTC generation date.
+
+Claude Code writes one transcript line per content block of an API response.
+The collector counts each request once, keeping its most complete usage, and
+marks a turn only after a user prompt. The API also folds Claude events that
+share a session and message id, so lines already uploaded by older agents
+count once.
+
 ## Privacy Contract
 
 - Public profile is disabled by default.

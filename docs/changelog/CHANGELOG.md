@@ -2,6 +2,17 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-11-02-usage-integrity"></a>
+
+## 2026-11-02 - Usage integrity fixes
+
+Date: 2026-11-02
+
+- Claude Code usage is counted once per API request. The collector previously counted each transcript content-block line, which inflated tokens, events, and messages by about two to three times. Turns now start only after a user prompt. The API folds Claude events that share a session and message id, so duplicates already uploaded by older agents collapse on the next sync. ([#14](https://github.com/AsaZhou923/toksync/issues/14))
+- `UsageEventV1` caps each token field at 1,000,000,000, cost at $1,000,000, and message count at 1,000,000 per event. Shared number formatting renders non-finite values as `—`, so oversized or corrupted aggregates cannot break the dashboard, the public profile, or SVG output. ([#15](https://github.com/AsaZhou923/toksync/issues/15))
+- `localDate` must be a real calendar date within one day of the UTC date of `timestampMs`. The API rejects events timestamped more than 24 hours in the future. Collectors now derive `localDate` from the agent machine's timezone instead of UTC. ([#18](https://github.com/AsaZhou923/toksync/issues/18))
+- Update `@hono/node-server` from 1.19.17 to 2.1.5 in the API and worker to clear [GHSA-rmxm-3fg6-px4f](https://github.com/advisories/GHSA-rmxm-3fg6-px4f), which has no 1.x fix. TokSync does not use `serveStatic`; `serve`, `createAdaptorServer`, and `getConnInfo` keep their behavior.
+
 <a id="2026-10-13-dependency-security"></a>
 
 ## 2026-10-13 - Dependency security and Vitest 4 migration

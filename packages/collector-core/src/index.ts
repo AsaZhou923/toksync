@@ -6,7 +6,8 @@ import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
 import { hashWorkspacePath, workspaceLabelFromPath } from "@toksync/privacy";
 import {
   SOURCE_REGISTRY,
-  isoDateFromMs,
+  localDateFromMs,
+  totalTokens,
   usageEventV1Schema,
   type BuiltInSourceId,
   type UsageEventV1,
@@ -193,14 +194,38 @@ function dedupeEventsByKey(events: UsageEventV1[]) {
   const byKey = new Map<string, UsageEventV1>();
   const output: UsageEventV1[] = [];
   for (const event of events) {
-    if (!event.sourceMessageId?.startsWith("token-count:")) {
+    const tokenCount = event.sourceMessageId?.startsWith("token-count:");
+    if (!tokenCount && event.source !== "claude") {
       output.push(event);
       continue;
     }
     const current = byKey.get(event.dedupKey);
-    if (!current || event.timestampMs >= current.timestampMs) {
+    if (!current) {
       byKey.set(event.dedupKey, event);
+      continue;
     }
+    // Codex token-count snapshots are cumulative: the latest one wins.
+    if (tokenCount) {
+      if (event.timestampMs >= current.timestampMs) {
+        byKey.set(event.dedupKey, event);
+      }
+      continue;
+    }
+    // Claude Code writes one transcript line per content block of a message:
+    // keep the most complete usage, the earliest line on ties, and any turn
+    // marker.
+    const preferred =
+      totalTokens(event.tokens) > totalTokens(current.tokens) ||
+      (totalTokens(event.tokens) === totalTokens(current.tokens) &&
+        event.timestampMs < current.timestampMs)
+        ? event
+        : current;
+    byKey.set(
+      event.dedupKey,
+      current.isTurnStart || event.isTurnStart
+        ? { ...preferred, isTurnStart: true }
+        : preferred,
+    );
   }
   return [...output, ...byKey.values()];
 }
@@ -338,6 +363,7 @@ interface NormalizeContext {
 }
 
 interface FileNormalizeState {
+  claudeTurnPending?: boolean;
   sourceSessionId?: string;
   modelId?: string;
   providerId?: string;
@@ -351,6 +377,9 @@ function normalizeRecord(
 ): UsageEventV1 | null {
   if (!isRecord(record)) return null;
   updateFileState(record, ctx.fileState);
+  if (ctx.source === "claude" && isClaudeUserPrompt(record)) {
+    ctx.fileState.claudeTurnPending = true;
+  }
   const tokens = normalizeTokens(record, ctx.source);
   if (
     tokens.input +
@@ -413,6 +442,17 @@ function normalizeRecord(
     codexTokenCountMessageId(record, ctx.source, modelId) ??
     optionalString(record.timestamp) ??
     String(ctx.index + 1);
+  // One Claude API response spans several transcript lines that share the
+  // request/message id and usage, so its identity must not include the
+  // per-line timestamp.
+  const claudeApiMessageId =
+    ctx.source === "claude"
+      ? optionalString(record.requestId, message?.id)
+      : undefined;
+  const messageScoped =
+    sourceMessageId.startsWith("token-count:") ||
+    (claudeApiMessageId !== undefined &&
+      sourceMessageId === claudeApiMessageId);
   const workspacePath = optionalString(
     record.workspacePath,
     record.projectPath,
@@ -460,9 +500,7 @@ function normalizeRecord(
         source: ctx.source,
         sourceSessionId,
         sourceMessageId,
-        timestampMs: sourceMessageId.startsWith("token-count:")
-          ? 0
-          : timestampMs,
+        timestampMs: messageScoped ? 0 : timestampMs,
         modelId,
       }),
     deviceId: ctx.deviceId,
@@ -474,16 +512,41 @@ function normalizeRecord(
     timestampMs,
     localDate:
       optionalString(record.localDate, record.local_date) ??
-      isoDateFromMs(timestampMs),
+      localDateFromMs(timestampMs),
     tokens,
     costUsd:
       numberValue(record.costUsd, record.cost_usd, record.cost) ??
       (pricingForModel(modelId) ? estimateCostUsd(modelId, tokens) : undefined),
     messageCount: numberValue(record.messageCount, record.message_count) ?? 1,
-    isTurnStart: Boolean(record.isTurnStart ?? record.turnStart ?? true),
+    isTurnStart: Boolean(
+      record.isTurnStart ?? record.turnStart ?? claudeTurnStart(record, ctx),
+    ),
   };
 
   return usageEventV1Schema.parse(event);
+}
+
+function isClaudeUserPrompt(record: Record<string, unknown>) {
+  if (record.type !== "user" || record.isMeta === true) return false;
+  const content = recordValue(record.message)?.content;
+  if (typeof content === "string") return content.trim().length > 0;
+  return (
+    Array.isArray(content) &&
+    content.some((item) => isRecord(item) && item.type === "text")
+  );
+}
+
+// Claude Code transcripts mark turns with user prompt lines; the first
+// assistant usage after a prompt starts the turn. Other formats default to
+// one turn per usage record.
+function claudeTurnStart(
+  record: Record<string, unknown>,
+  ctx: NormalizeContext,
+) {
+  if (ctx.source !== "claude" || record.type !== "assistant") return true;
+  const turnStart = ctx.fileState.claudeTurnPending ?? true;
+  ctx.fileState.claudeTurnPending = false;
+  return turnStart;
 }
 
 function normalizeTokens(record: Record<string, unknown>, source: string) {

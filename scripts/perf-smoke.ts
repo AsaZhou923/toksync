@@ -220,7 +220,7 @@ function perfEvent(deviceId: string, index: number): UsageEventV1 {
     workspaceLabel: `workspace-${index % 5}`,
     modelId: index % 2 === 0 ? "gpt-5.4" : "claude-3-5-sonnet",
     providerId: index % 2 === 0 ? "openai" : "anthropic",
-    timestampMs: 1770000000000 + index,
+    timestampMs: 1770000000000 + (index % 2) * 86_400_000 + index,
     localDate: index % 2 === 0 ? "2026-02-03" : "2026-02-04",
     tokens: {
       input: 60,

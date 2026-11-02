@@ -1,7 +1,7 @@
 import { estimateCostUsd, pricingForModel } from "@toksync/pricing";
 import { hashWorkspacePath, workspaceLabelFromPath } from "@toksync/privacy";
 import {
-  isoDateFromMs,
+  localDateFromMs,
   usageEventV1Schema,
   type TokenBreakdown,
   type UsageEventV1,
@@ -80,7 +80,7 @@ export function usageEventFromCandidate(
     providerId:
       candidate.providerId ?? inferProvider(candidate.modelId, "unknown"),
     timestampMs,
-    localDate: isoDateFromMs(timestampMs),
+    localDate: localDateFromMs(timestampMs),
     tokens: candidate.tokens,
     ...(costUsd === undefined ? {} : { costUsd }),
     messageCount: candidate.messageCount ?? 1,
