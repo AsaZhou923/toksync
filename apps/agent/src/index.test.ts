@@ -4,6 +4,7 @@ import {
   buildUsageReport,
   buildLocalReceipt,
   dashboardUrlFromApiUrl,
+  resolveDashboardUrl,
   ensureUploadAllowed,
   formatCollectWarnings,
   formatStatus,
@@ -208,6 +209,8 @@ describe("agent CLI helpers", () => {
       dateEnd: "2026-01-02",
       sources: { codex: 2, claude: 1 },
       models: { "gpt-5.4": 3 },
+      unpricedEventCount: 0,
+      unpricedModels: [],
     };
     const receipt = {
       payloadDigest: "sha256:test",
@@ -228,6 +231,29 @@ describe("agent CLI helpers", () => {
     );
   });
 
+  it("flags events without model pricing in the sync summary", () => {
+    const receipt = {
+      payloadDigest: "sha256:test",
+      uploadedFields: [],
+      excludedFields: [],
+    };
+    const summary = {
+      eventCount: 9,
+      tokens: 42,
+      costUsd: 0.5,
+      dateStart: "2026-01-01",
+      dateEnd: "2026-01-02",
+      sources: { claude: 9 },
+      models: {},
+      unpricedEventCount: 7,
+      unpricedModels: ["model-a", "model-b", "model-c", "model-d", "model-e"],
+    };
+
+    expect(formatSyncSummary(summary, receipt)).toContain(
+      "Cost estimate: $0.5000 (excludes 7 events without model pricing: model-a, model-b, model-c, 2 more)",
+    );
+  });
+
   it("formats the post-sync dashboard URL without private identifiers", () => {
     expect(formatDashboardUrl(baseConfig)).toBe(
       "Dashboard: http://localhost:3000/app",
@@ -237,15 +263,15 @@ describe("agent CLI helpers", () => {
         ...baseConfig,
         apiUrl: "https://api.example.test/v1",
       }),
-    ).toBe("Dashboard: https://api.example.test/app");
+    ).toBeUndefined();
     expect(
       formatDashboardUrl({
         ...baseConfig,
-        apiUrl: "https://api.example.test/v1?token=should-not-print",
+        apiUrl: "http://localhost:4000/v1?token=should-not-print",
         deviceToken: "tsd_private_device_token",
         deviceId: "private-device-id",
       }),
-    ).not.toMatch(/token=|tsd_private|private-device-id/);
+    ).toBe("Dashboard: http://localhost:3000/app");
     expect(
       formatDashboardUrl({ ...baseConfig, apiUrl: "file:///tmp/toksync" }),
     ).toBeUndefined();
@@ -338,11 +364,45 @@ describe("agent CLI helpers", () => {
       dashboardUrlFromApiUrl(
         "https://api.toksync.example:8443/v1/sync?token=private#details",
       ),
-    ).toBe("https://api.toksync.example:8443/app");
+    ).toBeUndefined();
+    expect(dashboardUrlFromApiUrl("http://localhost:4555/v1")).toBeUndefined();
     expect(
       dashboardUrlFromApiUrl("ftp://localhost:4000/usage"),
     ).toBeUndefined();
     expect(dashboardUrlFromApiUrl("not a URL")).toBeUndefined();
+  });
+
+  it("prefers the dashboard URL reported by the API", () => {
+    const hostedApi = "https://api.toksync.example/v1";
+
+    expect(
+      resolveDashboardUrl(
+        hostedApi,
+        [
+          { status: "accepted" },
+          {
+            status: "accepted",
+            dashboardUrl:
+              "https://user:secret@app.toksync.example/team/app?token=private#x",
+          },
+        ],
+        "http://localhost:3555",
+      ),
+    ).toBe("https://app.toksync.example/team/app");
+    expect(
+      resolveDashboardUrl(
+        hostedApi,
+        [{ dashboardUrl: "javascript:alert(1)" }],
+        "https://web.example/base/",
+      ),
+    ).toBe("https://web.example/base/app");
+    expect(resolveDashboardUrl("http://localhost:4000", [], "")).toBe(
+      "http://localhost:3000/app",
+    );
+    expect(resolveDashboardUrl(hostedApi, [], "")).toBeUndefined();
+    expect(
+      resolveDashboardUrl("http://localhost:4555", [], ""),
+    ).toBeUndefined();
   });
 
   it("skips interactive sync confirmation only for explicit or headless modes", () => {
@@ -473,6 +533,7 @@ describe("agent CLI helpers", () => {
         tokens: 175,
         costUsd: 0.12,
         events: 2,
+        unpricedEvents: 1,
         messages: 2,
         turns: 2,
       },
@@ -481,6 +542,7 @@ describe("agent CLI helpers", () => {
         tokens: 75,
         costUsd: 0.08,
         events: 1,
+        unpricedEvents: 0,
         messages: 1,
         turns: 1,
       },
@@ -506,6 +568,16 @@ describe("agent CLI helpers", () => {
     expect(table).toContain("gpt-5.4");
     expect(table).not.toContain("session-private");
     expect(table).not.toContain("message-private");
+    expect(table).toContain("$0.1200*");
+    expect(table).toContain(
+      "Cost excludes 1 event without model pricing (n/a, or * when partial).",
+    );
+
+    const unpricedTable = formatUsageReport(
+      buildUsageReport([events[2]!], "models"),
+      "table",
+    );
+    expect(unpricedTable).toMatch(/gpt-5\.4\s+25\s+n\/a\s+1/);
   });
 
   it("validates report views and output formats", () => {

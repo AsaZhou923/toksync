@@ -285,7 +285,7 @@ program
     console.log(
       formatSyncUploadResult(
         responses,
-        dashboardUrlFromApiUrl(process.env.APP_URL || config.apiUrl),
+        resolveDashboardUrl(config.apiUrl, responses),
       ),
     );
   });
@@ -399,12 +399,26 @@ export function formatSyncSummary(
   return [
     `Events: ${summary.eventCount}`,
     `Tokens: ${summary.tokens}`,
-    `Cost estimate: ${formatUsd(summary.costUsd)}`,
+    `Cost estimate: ${formatUsd(summary.costUsd)}${formatUnpriced(summary)}`,
     `Date range: ${summary.dateStart ?? "n/a"} to ${summary.dateEnd ?? "n/a"}`,
     `Sources: ${formatSourceCounts(summary.sources)}`,
     `Receipt digest: ${receipt.payloadDigest}`,
     `Receipt excludes: ${receipt.excludedFields.join(", ")}`,
   ].join("\n");
+}
+
+const UNPRICED_MODELS_SHOWN = 3;
+
+function formatUnpriced(summary: ReturnType<typeof summarizeEvents>) {
+  if (summary.unpricedEventCount === 0) return "";
+  const shown = summary.unpricedModels.slice(0, UNPRICED_MODELS_SHOWN);
+  const more = summary.unpricedModels.length - shown.length;
+  const models = more > 0 ? [...shown, `${more} more`] : shown;
+  return ` (excludes ${countEvents(summary.unpricedEventCount)} without model pricing: ${models.join(", ")})`;
+}
+
+function countEvents(count: number) {
+  return `${count} ${count === 1 ? "event" : "events"}`;
 }
 
 function formatSourceCounts(sources: Record<string, number>) {
@@ -529,15 +543,46 @@ function safeHttpOrigin(apiUrl?: string) {
   return parseHttpUrl(apiUrl)?.origin;
 }
 
+// Prefer the dashboard URL the API derives from its APP_URL, then a local
+// APP_URL. Without either, only the default local API ports map to a known
+// web port; any other API host gets no link rather than a guessed one.
+export function resolveDashboardUrl(
+  apiUrl: string,
+  responses: SyncUploadResponse[] = [],
+  appUrl = process.env.APP_URL,
+) {
+  for (const response of responses) {
+    const reported = parseHttpUrl(
+      typeof response.dashboardUrl === "string"
+        ? response.dashboardUrl
+        : undefined,
+    );
+    if (reported)
+      return `${reported.protocol}//${reported.host}${reported.pathname}`;
+  }
+  const app = parseHttpUrl(appUrl);
+  if (app) {
+    return `${app.protocol}//${app.host}${app.pathname.replace(/\/+$/, "")}/app`;
+  }
+  return dashboardUrlFromApiUrl(apiUrl);
+}
+
+const LOCAL_WEB_PORTS: Record<string, string> = {
+  "4000": "3000",
+  "4300": "3300",
+};
+
 export function dashboardUrlFromApiUrl(apiUrl: string) {
   const parsed = parseHttpUrl(apiUrl);
   if (!parsed) return undefined;
-
-  if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-    if (parsed.port === "4000") parsed.port = "3000";
-    if (parsed.port === "4300") parsed.port = "3300";
+  const webPort = LOCAL_WEB_PORTS[parsed.port];
+  if (
+    (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") ||
+    !webPort
+  ) {
+    return undefined;
   }
-
+  parsed.port = webPort;
   return `${parsed.protocol}//${parsed.host}/app`;
 }
 
@@ -763,6 +808,7 @@ export interface UsageReportRow {
   tokens: number;
   costUsd: number;
   events: number;
+  unpricedEvents: number;
   messages: number;
   turns: number;
 }
@@ -789,12 +835,14 @@ export function buildUsageReport(
         tokens: 0,
         costUsd: 0,
         events: 0,
+        unpricedEvents: 0,
         messages: 0,
         turns: 0,
       } satisfies UsageReportRow);
     row.tokens += totalTokens(event.tokens);
     row.costUsd += event.costUsd ?? 0;
     row.events += 1;
+    row.unpricedEvents += event.costUsd === undefined ? 1 : 0;
     row.messages += event.messageCount ?? 0;
     row.turns += event.isTurnStart ? 1 : 0;
     rows.set(key, row);
@@ -824,7 +872,7 @@ export function formatUsageReport(
     ...report.rows.map((row) => [
       row.key,
       String(row.tokens),
-      formatUsd(row.costUsd),
+      formatReportCost(row),
       String(row.events),
       String(row.messages),
       String(row.turns),
@@ -832,6 +880,10 @@ export function formatUsageReport(
   ];
   const widths = header.map((_, column) =>
     Math.max(...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  const unpricedEvents = report.rows.reduce(
+    (sum, row) => sum + row.unpricedEvents,
+    0,
   );
   return [
     `TokSync ${report.kind} report`,
@@ -843,7 +895,18 @@ export function formatUsageReport(
           .trimEnd(),
       )
       .join("\n"),
+    ...(unpricedEvents > 0
+      ? [
+          `Cost excludes ${countEvents(unpricedEvents)} without model pricing (n/a, or * when partial).`,
+        ]
+      : []),
   ].join("\n");
+}
+
+function formatReportCost(row: UsageReportRow) {
+  if (row.unpricedEvents === 0) return formatUsd(row.costUsd);
+  if (row.unpricedEvents === row.events) return "n/a";
+  return `${formatUsd(row.costUsd)}*`;
 }
 
 export function parseReportKind(value: string): UsageReportKind {

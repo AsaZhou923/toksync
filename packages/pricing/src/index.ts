@@ -8,6 +8,15 @@ export interface ModelPricing {
   source: string;
   sourceUrl: string;
   note?: string;
+  // Higher rates for a request whose prompt (input + cache read + cache write
+  // tokens) exceeds the threshold.
+  longPrompt?: {
+    thresholdTokens: number;
+    inputPerMillion: number;
+    outputPerMillion: number;
+    cacheReadPerMillion: number;
+    cacheWritePerMillion: number;
+  };
 }
 
 export interface ModelPricingLookup {
@@ -37,6 +46,23 @@ const SOURCES = {
   deepseekPricing: "https://api-docs.deepseek.com/quick_start/pricing/",
   zaiPricing: "https://docs.z.ai/guides/overview/pricing",
 };
+
+function anthropicPricing(
+  inputPerMillion: number,
+  outputPerMillion: number,
+  cacheReadPerMillion: number,
+  cacheWritePerMillion: number,
+): ModelPricing {
+  return {
+    inputPerMillion,
+    outputPerMillion,
+    cacheReadPerMillion,
+    cacheWritePerMillion,
+    source: "Anthropic Claude pricing",
+    sourceUrl: SOURCES.anthropicPricing,
+    note: "TokSync maps its single cacheWrite bucket to Anthropic's 5-minute cache write rate.",
+  };
+}
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.5": {
@@ -114,15 +140,35 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: SOURCES.googleGeminiPricing,
     note: "Uses the Standard paid tier for prompts <= 200k tokens; larger prompts have higher rates that TokSync cannot infer from aggregate event data yet.",
   },
-  "claude-sonnet-4.6": {
-    inputPerMillion: 3,
-    outputPerMillion: 15,
-    cacheReadPerMillion: 0.3,
-    cacheWritePerMillion: 3.75,
-    source: "Anthropic Claude pricing",
-    sourceUrl: SOURCES.anthropicPricing,
-    note: "TokSync maps its single cacheWrite bucket to Anthropic's 5-minute cache write rate.",
+  "claude-fable-5.1": anthropicPricing(10, 50, 0.25, 12.5),
+  "claude-mythos-5.1": anthropicPricing(10, 50, 0.25, 12.5),
+  "claude-fable-5": anthropicPricing(10, 50, 1, 12.5),
+  "claude-mythos-5": anthropicPricing(10, 50, 1, 12.5),
+  "claude-opus-5.5": anthropicPricing(4, 20, 0.2, 5),
+  "claude-opus-5": anthropicPricing(5, 25, 0.5, 6.25),
+  "claude-opus-4.8": anthropicPricing(5, 25, 0.5, 6.25),
+  "claude-opus-4.7": anthropicPricing(5, 25, 0.5, 6.25),
+  "claude-opus-4.6": anthropicPricing(5, 25, 0.5, 6.25),
+  "claude-opus-4.5": anthropicPricing(5, 25, 0.5, 6.25),
+  "claude-opus-4.1": anthropicPricing(15, 75, 1.5, 18.75),
+  "claude-opus-4": anthropicPricing(15, 75, 1.5, 18.75),
+  "claude-sonnet-5.5": anthropicPricing(2, 10, 0.1, 2.5),
+  "claude-sonnet-5": anthropicPricing(2, 10, 0.2, 2.5),
+  "claude-sonnet-4.6": anthropicPricing(3, 15, 0.3, 3.75),
+  "claude-sonnet-4.5": anthropicPricing(3, 15, 0.3, 3.75),
+  "claude-sonnet-4": anthropicPricing(3, 15, 0.3, 3.75),
+  "claude-haiku-5.5": {
+    ...anthropicPricing(0.1, 0.5, 0.01, 0.125),
+    longPrompt: {
+      thresholdTokens: 100_000,
+      inputPerMillion: 0.5,
+      outputPerMillion: 2.5,
+      cacheReadPerMillion: 0.05,
+      cacheWritePerMillion: 0.625,
+    },
   },
+  "claude-haiku-4.5": anthropicPricing(1, 5, 0.1, 1.25),
+  "claude-haiku-3.5": anthropicPricing(0.8, 4, 0.08, 1),
   "deepseek-v4-flash": {
     inputPerMillion: 0.14,
     outputPerMillion: 0.28,
@@ -157,11 +203,6 @@ const MODEL_ALIASES: Record<string, string> = {
   "gpt-5.4-mini": "gpt-5.4-mini",
   "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",
   "gemini-3-pro-preview": "gemini-3.1-pro-preview",
-  "claude-sonnet-4-6": "claude-sonnet-4.6",
-  "claude-4-6-sonnet": "claude-sonnet-4.6",
-  "claude-sonnet-4.5": "claude-sonnet-4.6",
-  "claude-sonnet-4-5": "claude-sonnet-4.6",
-  "claude-sonnet-4": "claude-sonnet-4.6",
   "deepseek-chat": "deepseek-v4-flash",
   "deepseek-reasoner": "deepseek-v4-flash",
   "deepseek-v4-pro-thinking": "deepseek-v4-pro",
@@ -218,13 +259,18 @@ export function auditModelPricing(
 export function estimateCostUsd(modelId: string, tokens: TokenBreakdown) {
   const pricing = pricingForModel(modelId);
   if (!pricing) return 0;
+  const promptTokens = tokens.input + tokens.cacheRead + tokens.cacheWrite;
+  const rates =
+    pricing.longPrompt && promptTokens > pricing.longPrompt.thresholdTokens
+      ? pricing.longPrompt
+      : pricing;
 
   return roundUsd(
-    (tokens.input * pricing.inputPerMillion +
-      tokens.output * pricing.outputPerMillion +
-      tokens.cacheRead * pricing.cacheReadPerMillion +
-      tokens.cacheWrite * pricing.cacheWritePerMillion +
-      tokens.reasoning * pricing.outputPerMillion) /
+    (tokens.input * rates.inputPerMillion +
+      tokens.output * rates.outputPerMillion +
+      tokens.cacheRead * rates.cacheReadPerMillion +
+      tokens.cacheWrite * rates.cacheWritePerMillion +
+      tokens.reasoning * rates.outputPerMillion) /
       1_000_000,
   );
 }
@@ -243,6 +289,7 @@ function canonicalModelId(modelId: string) {
     stripSnapshotSuffix(providerStripped),
     stripParenthesizedReasoningTier(normalized),
     stripParenthesizedReasoningTier(providerStripped),
+    canonicalClaudeModelId(normalized),
   ].filter(Boolean) as string[];
 
   for (const candidate of candidates) {
@@ -265,6 +312,41 @@ function stripProviderPrefix(modelId: string) {
 
 function stripSnapshotSuffix(modelId: string) {
   return modelId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+}
+
+// Claude ids appear as claude-opus-4-6, claude-sonnet-4-5-20250929,
+// claude-3-5-haiku-20241022, claude-opus-4-5@20251101 (Vertex) or
+// us.anthropic.claude-sonnet-4-5-20250929-v1:0 (Bedrock). All map to the
+// dotted claude-<family>-<version> pricing keys.
+function canonicalClaudeModelId(modelId: string) {
+  const start = modelId.indexOf("claude-");
+  if (start < 0) return undefined;
+  const id = modelId
+    .slice(start)
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/[@-]\d{8}$/, "");
+  const current = CLAUDE_CURRENT_ID.exec(id);
+  if (current) return claudePricingKey(current[1], current[2], current[3]);
+  const legacy = CLAUDE_LEGACY_ID.exec(id);
+  if (legacy) return claudePricingKey(legacy[3], legacy[1], legacy[2]);
+  return undefined;
+}
+
+const CLAUDE_FAMILIES = "opus|sonnet|haiku|fable|mythos";
+const CLAUDE_CURRENT_ID = new RegExp(
+  `^claude-(${CLAUDE_FAMILIES})-(\\d+)(?:[-.](\\d))?$`,
+);
+const CLAUDE_LEGACY_ID = new RegExp(
+  `^claude-(\\d+)(?:[-.](\\d))?-(${CLAUDE_FAMILIES})$`,
+);
+
+function claudePricingKey(
+  family: string | undefined,
+  major: string | undefined,
+  minor: string | undefined,
+) {
+  return `claude-${family}-${major}${minor ? `.${minor}` : ""}`;
 }
 
 function stripParenthesizedReasoningTier(modelId: string) {

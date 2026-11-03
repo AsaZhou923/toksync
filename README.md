@@ -222,6 +222,16 @@ marks a turn only after a user prompt. The API also folds Claude events that
 share a session and message id, so lines already uploaded by older agents
 count once.
 
+Claude cost estimates follow Anthropic's published per-token prices for every
+model on its pricing page, including the long-prompt tier for Claude Haiku 5.5.
+Snapshot, Bedrock and Vertex model ids map to the same prices. Sync previews
+and `report` output name models without pricing instead of counting them as
+$0.
+
+Successful usage uploads include `dashboardUrl` when the API has `APP_URL`
+configured, and the agent prints that link after a sync. Without it, the agent
+prints a link only for the default local API ports (4000 and 4300).
+
 ## Privacy Contract
 
 - Public profile is disabled by default.
