@@ -437,6 +437,45 @@ describe("collector-core fixtures", () => {
     );
   });
 
+  it("prices Claude Code models and reports models without pricing", async () => {
+    const line = (uuid: string, model: string) => ({
+      type: "assistant",
+      sessionId: "claude-pricing",
+      uuid,
+      requestId: `req_${uuid}`,
+      timestamp: "2026-02-04T10:00:00.000Z",
+      message: {
+        id: `msg_${uuid}`,
+        model,
+        usage: { input_tokens: 1_000_000, output_tokens: 0 },
+      },
+    });
+    const fixture = writeFixture("claude", [
+      line("a1", "claude-opus-4-6"),
+      line("a2", "claude-sonnet-4-5-20250929"),
+      line("a3", "claude-3-5-sonnet-20241022"),
+      line("a4", "claude-mystery-1"),
+    ]);
+
+    const result = await collectUsageEvents({ deviceId: "device-1", fixture });
+
+    expect(
+      Object.fromEntries(
+        result.events.map((event) => [event.modelId, event.costUsd]),
+      ),
+    ).toEqual({
+      "claude-opus-4-6": 5,
+      "claude-sonnet-4-5-20250929": 3,
+      "claude-3-5-sonnet-20241022": undefined,
+      "claude-mystery-1": undefined,
+    });
+    expect(summarizeEvents(result.events)).toMatchObject({
+      costUsd: 8,
+      unpricedEventCount: 2,
+      unpricedModels: ["claude-3-5-sonnet-20241022", "claude-mystery-1"],
+    });
+  });
+
   it("keeps the most complete usage when Claude repeats a message", async () => {
     const line = (uuid: string, second: number, outputTokens: number) => ({
       type: "assistant",

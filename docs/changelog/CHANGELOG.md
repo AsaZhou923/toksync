@@ -2,6 +2,16 @@
 
 TokSync 只维护这一份仓库内 changelog。外部文档库的 Update Logs 目录只是镜像副本。
 
+<a id="2026-11-03-claude-pricing-dashboard-link"></a>
+
+## 2026-11-03 - Claude pricing and dashboard link
+
+Date: 2026-11-03
+
+- Add Anthropic's published prices for all Claude models on its pricing page: every current Fable, Mythos, Opus, Sonnet, and Haiku model, the retired Opus 4/4.1, Sonnet 4, and Haiku 3.5 rows, and Claude Haiku 5.5's higher rates above 100,000 prompt tokens. Anthropic snapshot ids (`claude-sonnet-4-5-20250929`), legacy ids (`claude-3-5-haiku-20241022`), Vertex ids (`@20251101`), and Bedrock ids (`us.anthropic.…-v1:0`) map to those prices. Claude Code usage previously cost $0 for every Claude model except Sonnet 4.x. ([#19](https://github.com/AsaZhou923/toksync/issues/19))
+- `sync` previews name the models without pricing next to the cost estimate. `report` shows `n/a` for those models and marks rows that are only partly priced. ([#19](https://github.com/AsaZhou923/toksync/issues/19))
+- `POST /v1/sync/usage-batch` adds `dashboardUrl` to successful responses when `APP_URL` is configured. The agent prints that link after a sync. It no longer prints a link derived from a hosted or non-default API URL, which pointed to a 404 on the API host. ([#20](https://github.com/AsaZhou923/toksync/issues/20))
+
 <a id="2026-11-02-usage-integrity"></a>
 
 ## 2026-11-02 - Usage integrity fixes

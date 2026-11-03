@@ -235,9 +235,15 @@ export function summarizeEvents(events: UsageEventV1[]) {
   const byModel = new Map<string, number>();
   let tokens = 0;
   let costUsd = 0;
+  let unpricedEventCount = 0;
+  const unpricedModels = new Set<string>();
   const dates = new Set<string>();
   for (const event of events) {
     bySource.set(event.source, (bySource.get(event.source) ?? 0) + 1);
+    if (event.costUsd === undefined) {
+      unpricedEventCount += 1;
+      unpricedModels.add(event.modelId);
+    }
     byModel.set(event.modelId, (byModel.get(event.modelId) ?? 0) + 1);
     tokens +=
       event.tokens.input +
@@ -257,6 +263,8 @@ export function summarizeEvents(events: UsageEventV1[]) {
     dateEnd: sortedDates[sortedDates.length - 1] ?? null,
     sources: Object.fromEntries(bySource),
     models: Object.fromEntries(byModel),
+    unpricedEventCount,
+    unpricedModels: [...unpricedModels].sort(),
   };
 }
 

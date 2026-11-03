@@ -2183,4 +2183,43 @@ describe("TokSync API", () => {
     expect(republishedProfile.profile.showWorkspaceBreakdown).toBe(false);
     expect(republishedProfile.profile.topWorkspaces).toEqual([]);
   });
+
+  it.each([
+    [
+      "https://app.toksync.example/team/",
+      "https://app.toksync.example/team/app",
+    ],
+    [
+      "https://user:secret@app.toksync.example",
+      "https://app.toksync.example/app",
+    ],
+    ["", undefined],
+    ["not a url", undefined],
+    ["javascript:alert(1)", undefined],
+  ])(
+    "reports the dashboard URL for APP_URL %j on accepted usage batches",
+    async (appUrl, expected) => {
+      vi.stubEnv("APP_URL", appUrl);
+      try {
+        const { api } = testContext();
+        const device = await connectDevice(api);
+
+        const accepted = await json<Record<string, unknown>>(
+          await postBatch(
+            api,
+            device.deviceToken,
+            usageBatch(device.deviceId, [usageEvent(device.deviceId)]),
+          ),
+        );
+        expect(accepted.dashboardUrl).toBe(expected);
+
+        const rejected = await json<Record<string, unknown>>(
+          await postBatch(api, "tsd_invalid", usageBatch(device.deviceId, [])),
+        );
+        expect(rejected).not.toHaveProperty("dashboardUrl");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });

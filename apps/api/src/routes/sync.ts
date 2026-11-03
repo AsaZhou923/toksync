@@ -21,7 +21,11 @@ export function registerSyncRoutes(app: Hono, repo: TokSyncRepository) {
       bearerToken(c.req.raw) ?? undefined,
       body,
     );
-    return c.json(result.response, result.status as ContentfulStatusCode);
+    const dashboardUrl = result.ok ? appDashboardUrl() : undefined;
+    return c.json(
+      dashboardUrl ? { ...result.response, dashboardUrl } : result.response,
+      result.status as ContentfulStatusCode,
+    );
   });
 
   app.post("/v1/sync/content-batch", (c) =>
@@ -30,4 +34,19 @@ export function registerSyncRoutes(app: Hono, repo: TokSyncRepository) {
       501,
     ),
   );
+}
+
+// The agent cannot infer the web origin from the API URL in hosted
+// deployments, so the API reports it when APP_URL is configured.
+function appDashboardUrl() {
+  const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  if (!appUrl) return undefined;
+  try {
+    const url = new URL(`${appUrl}/app`);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? `${url.origin}${url.pathname}`
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
